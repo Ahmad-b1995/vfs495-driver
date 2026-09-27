@@ -1,0 +1,19 @@
+# Never commit HP/Validity/Synaptics proprietary material
+*.rpm
+*.img
+*.tar
+validity-sensor*
+vcsFPService*
+libvfsFprintWrapper*
+
+# Never commit sensor recordings, biometric data or per-device keys
+captures/
+*.pgm
+*.raw
+
+# Build and runtime artifacts
+build/
+.venv/
+__pycache__/
+*.pyc
+*.so
