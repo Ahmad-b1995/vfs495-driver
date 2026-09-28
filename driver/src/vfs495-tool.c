@@ -3,8 +3,9 @@
  *
  *   vfs495-tool assemble LINES.raw OUT.pgm
  *       stitch descrambled scan lines (upstream format: repeated [u16 len][264 bytes])
- *   vfs495-tool capture COMMANDS.bin OUT_PREFIX [COUNT]
- *       run the sensor session, capture COUNT swipes, write OUT_PREFIX.N.pgm and .lines.raw
+ *   vfs495-tool capture COMMANDS.bin OUT_PREFIX [COUNT [TIMEOUT_S]]
+ *       run the sensor session, capture COUNT swipes (waiting up to TIMEOUT_S each), write
+ *       OUT_PREFIX.N.pgm and .lines.raw
  */
 #include <gio/gio.h>
 #include <stdio.h>
@@ -15,7 +16,7 @@
 #include "vfs495-image.h"
 #include "vfs495-proto.h"
 
-#define SWIPE_TIMEOUT_S 30
+static int swipe_timeout_s = 30;
 
 static gboolean
 write_pgm (const char *path, const guint8 *img, int w, int h, GError **error)
@@ -94,7 +95,7 @@ cancel_after (gpointer data)
 {
   GCancellable *c = data;
 
-  for (int i = 0; i < SWIPE_TIMEOUT_S * 10 && !g_cancellable_is_cancelled (c); i++)
+  for (int i = 0; i < swipe_timeout_s * 10 && !g_cancellable_is_cancelled (c); i++)
     g_usleep (100000);
   g_cancellable_cancel (c);
   return NULL;
@@ -123,12 +124,15 @@ cmd_capture (int argc, char **argv)
   Vfs495Commands *cmds = NULL;
   Vfs495Session *s = NULL;
   int count = argc > 4 ? atoi (argv[4]) : 1;
+
+  if (argc > 5)
+    swipe_timeout_s = atoi (argv[5]);
   int rc = 1;
   gint64 t0;
 
   if (argc < 4)
     {
-      g_printerr ("usage: vfs495-tool capture COMMANDS.bin OUT_PREFIX [COUNT]\n");
+      g_printerr ("usage: vfs495-tool capture COMMANDS.bin OUT_PREFIX [COUNT [TIMEOUT_S]]\n");
       return 2;
     }
   cmds = vfs495_commands_load (argv[2], &error);
@@ -138,7 +142,9 @@ cmd_capture (int argc, char **argv)
   if (!ctx)
     goto out;
   usb = g_usb_context_find_by_vid_pid (ctx, 0x138a, 0x003f, &error);
-  if (!usb || !g_usb_device_open (usb, &error) ||
+  /* the sensor keeps patches from an earlier session unless it was suspended; a port reset
+   * returns it to its power-on state (the driver does the same on open) */
+  if (!usb || !g_usb_device_open (usb, &error) || !g_usb_device_reset (usb, &error) ||
       !g_usb_device_claim_interface (usb, 0, G_USB_DEVICE_CLAIM_INTERFACE_NONE, &error))
     goto out;
 
@@ -172,7 +178,7 @@ cmd_capture (int argc, char **argv)
           g_thread_join (timer);
           if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
             {
-              g_print ("   no swipe within %d s\n", SWIPE_TIMEOUT_S);
+              g_print ("   no swipe within %d s\n", swipe_timeout_s);
               g_clear_error (&error);
               continue;
             }
@@ -222,6 +228,6 @@ main (int argc, char **argv)
   if (argc >= 2 && strcmp (argv[1], "capture") == 0)
     return cmd_capture (argc, argv);
   g_printerr ("usage: vfs495-tool assemble LINES.raw OUT.pgm\n"
-              "       vfs495-tool capture COMMANDS.bin OUT_PREFIX [COUNT]\n");
+              "       vfs495-tool capture COMMANDS.bin OUT_PREFIX [COUNT [TIMEOUT_S]]\n");
   return 2;
 }

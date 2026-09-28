@@ -16,6 +16,8 @@ vfs495_decode_stream (const guint8 *stream, gsize len, const guint8 key[32], con
   EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new ();
   int out_len = 0;
   gsize i = 0;
+  guint frames = 0, gaps = 0, stray = 0;
+  guint16 last_seq = 0;
 
   if (!ctx || !EVP_DecryptInit_ex (ctx, EVP_aes_256_cbc (), NULL, key, iv) ||
       !EVP_CIPHER_CTX_set_padding (ctx, 0) ||
@@ -33,7 +35,11 @@ vfs495_decode_stream (const guint8 *stream, gsize len, const guint8 key[32], con
       if (plain[i] == 0x01 && plain[i + 1] == 0xfe)
         {
           guint8 line[VFS495_LINE_WIDTH];
+          guint16 seq = plain[i + 2] | plain[i + 3] << 8;
 
+          if (frames++ > 0 && seq != (guint16) (last_seq + 1))
+            gaps++;
+          last_seq = seq;
           for (int k = 0; k < VFS495_LINE_WIDTH; k++)
             line[descramble[k]] = plain[i + HEADER + k];
           g_byte_array_append (lines, line, VFS495_LINE_WIDTH);
@@ -42,8 +48,10 @@ vfs495_decode_stream (const guint8 *stream, gsize len, const guint8 key[32], con
       else
         {
           i++;
+          stray++;
         }
     }
+  g_debug ("decoded %u frames, %u sequence gaps, %u stray bytes", frames, gaps, stray);
   *n_lines = lines->len / VFS495_LINE_WIDTH;
   return g_byte_array_free (lines, FALSE);
 }

@@ -394,7 +394,8 @@ estimate_lag (const double *lines, int n, int lo, int hi, int *lag, double *conf
     }
   for (int c0 = C0_FIRST; c0 <= C0_LAST; c0++)
     {
-      for (int r = a; r < b; r++)
+      /* line t is compared with main row t + tau, so rows up to b - 1 + MAX_LAG are needed */
+      for (int r = a; r < MIN (n, b + MAX_LAG); r++)
         unit_row (hp + (gsize) r * VFS495_MAIN_WIDTH + c0, m + (gsize) r * AUX_WIDTH, AUX_WIDTH);
       for (int tau = 1; tau <= MAX_LAG; tau++)
         {

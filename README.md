@@ -20,7 +20,17 @@ What still comes from HP: the firmware patch bodies and the configuration comman
 taken from recordings of HP's tool. Open question for the driver: how to obtain those
 payloads at install time without redistributing them, and whether they differ between sensors.
 
-Current work: stitching swipes into undistorted prints (Phase 2, see "Image quality" below).
+**The libfprint driver works.** `driver/src/vfs495.c` is a libfprint TOD module: Ubuntu's own
+libfprint loads it, so no patched libfprint is needed. Through libfprint it opens the sensor in
+1.3 s, captures, enrolls and verifies: enrollment took 5 swipes with no retries, the enrolled
+right index matched 4 of 4 verify swipes, and another finger matched 0 of 6. Waiting without a
+finger re-arms every 50 s; cancelling and closing leave the sensor clean.
+
+**It is installed and in use** on the ZBook: `driver/tools/switch-to-native.sh` replaced
+vfs495-fprint (HP's tool behind libfprint's virtual reader) with this driver and Ubuntu's own
+fingerprint login; fprintd enrolls and verifies with it. `driver/tools/rollback-to-vfs495-fprint.sh`
+undoes the switch. fprintd's enrollment takes one swipe more than libfprint's five stages: it
+first identifies the finger against existing prints to refuse duplicates.
 
 Verified on an HP ZBook 17 G3, Ubuntu 25.10, sensor firmware 04.60.00.0104 Falcon ROM.
 
@@ -88,10 +98,39 @@ Verified on an HP ZBook 17 G3, Ubuntu 25.10, sensor firmware 04.60.00.0104 Falco
     session.
 15. **Every data-endpoint transfer must be drained before the next command.** Sending a command
    while the sensor is still streaming makes it reset (USB disconnect and re-enumeration).
-16. **The sensor needs recovery handling on open.** Starting the init sequence immediately after
-    HP's tool exited once failed with a USB I/O error on the first patch upload; 20 seconds
-    later it succeeded. A client that exits while the sensor is armed and holding data leaves
-    it to reset itself. A driver needs a reset or abort step before init.
+16. **Patches survive a session until the sensor is suspended.** After a session the sensor
+    keeps its patches, and the next session's first patch load fails (34-byte error reply),
+    after which the sensor resets itself (USB disconnect). The kernel autosuspends the sensor
+    2 s after the last user closes it, and suspend clears the patches: 1 s after a session the
+    state is stale, 4 s after it is fresh. This is why a retry "20 seconds later" worked. A USB
+    port reset also returns the sensor to its power-on state, in 0.24 s and without
+    re-enumeration, so the driver resets the port on open. The state is visible in the `01`
+    reply: bytes 17 and 37 are `00 00` after power-on, byte 37 is `15` with a patch loaded.
+    HP ends each session with abort, unload (`1a`) and a reload of the pre-session patch before
+    close_notify; the driver does the same.
+17. **Setup data has no end marker.** The sensor sends the flash blocks (128 and 4096 bytes before
+    the session, 512 KB inside it) and calibration data as whole 64-byte packets with no short
+    packet after them. A read larger than the block only ends by timing out. pyusb returns the
+    data of a timed-out read; GUsb (and so libfprint) discards its length. HP requests the exact
+    length every time, and so does the driver: the command file stores each command's data
+    length.
+18. **The sensor resets if a command follows a flash read (`1f`) at once.** 1 ms of delay was
+    enough in tests. HP never waits less than 12 ms (128-byte read) or 20 ms (4096-byte read);
+    the driver waits 20 ms.
+19. **Swipe streams are whole 272-byte frames** (every capture so far), but a quarter of them end
+    on a 64-byte boundary with no short packet. The driver keeps four 1088-byte reads pending on
+    the data endpoint from arming until after the abort, with no timeout. 1088 is the least
+    common multiple of the packet and frame sizes, so every read either fills or ends on a
+    short packet and no read is left holding part of a stream. Six swipes read this way had no
+    sequence gaps.
+20. **A short read is not the end of a swipe.** The sensor flushes a short packet whenever it
+    pauses, including a few frames into a swipe. Treating that as the end made the client
+    abort while the sensor was still streaming (one swipe split in two, and once a sensor
+    reset). A swipe ends after 300 ms without data.
+21. **The sensor reports a finger before streaming.** In HP's recordings and in open captures
+    the finger-state reply shows `02` when the stream starts; polling stops at the first `02`
+    or the first data. A finger resting without moving also triggers a capture; the stitcher
+    rejects it for lack of motion.
 
 ## Image quality (Phase 2, in progress)
 
@@ -219,6 +258,22 @@ may matter across temperature or sensor units.
   `score_blocks.py` scores large sets in batches.
 - `research/patches/dump_hmac.py` is a gdb script that logs HP's patch-signature handling.
 - `research/tools/usblog.c` is the upstream libusb-0.1 logger with a thread-safety fix.
+- `driver/` is the C code for the libfprint driver, built with meson (`meson setup build/driver
+  driver && ninja -C build/driver`). `driver/tools/make-commands.py` writes the command file the
+  driver loads from a decrypted recording (it stays in `captures/`). `vfs495-tool capture
+  captures/vfs495-commands.bin OUT 5 45` captures five swipes; `vfs495-tool assemble` stitches
+  saved scan lines. The C stitcher matches `assemble.py` to within one grey level.
+- `driver/src/vfs495.c` is the libfprint driver, built as `build/driver/libfprint-tod-vfs495.so`.
+  It reads the command file from `/var/lib/vfs495-driver/commands.bin` (`$VFS495_COMMANDS`
+  overrides). `driver/tools/fp-test.py` runs it through libfprint without installing it
+  (`list`, `open`, `capture`, `enroll`, `verify`). Driver design notes:
+  - it resets the USB port on open (finding 16) and on recovery;
+  - four data reads stay pending from arming until after the abort (finding 19); a swipe ends
+    after 300 ms of silence (finding 20); decoding and stitching run in a worker thread;
+  - an error before a finger is reported triggers one silent reset and setup; an error
+    during a swipe asks for a retry; suspend stops at the next poll and resume sets up again;
+  - the module marks itself resident: its GType cannot be unregistered, and libfprint
+    unloads TOD modules when its context is freed.
 - `captures/` holds recordings. It is git-ignored: recordings contain the sensor serial,
   per-device keys and raw sensor data.
 
