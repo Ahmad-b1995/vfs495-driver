@@ -74,6 +74,10 @@ cmd_assemble (int argc, char **argv)
     }
   t0 = g_get_monotonic_time ();
   img = vfs495_assemble (lines, n, &info, &error);
+  g_print ("%s: region %d lines, trusted %d, confident %.0f%%, fast %.0f%%, median lag %.0f, still %.0f%%, "
+           "coverage %.0f%% -> %s\n", argv[2], info.region_lines, info.trusted, 100 * info.confident,
+           100 * info.fast, info.median_lag, 100 * info.still_fraction, 100 * info.coverage,
+           vfs495_swipe_verdict_name (vfs495_swipe_verdict (img, &info)));
   if (!img)
     {
       g_printerr ("%s: %s\n", argv[2], error->message);
@@ -194,6 +198,10 @@ cmd_capture (int argc, char **argv)
         goto out;
       write_lines_raw (raw, lines, n, NULL);
       img = vfs495_assemble (lines, n, &info, &error);
+      g_print ("   region %d lines, trusted %d, confident %.0f%%, fast %.0f%%, median lag %.0f, still %.0f%%, "
+               "coverage %.0f%% -> %s\n", info.region_lines, info.trusted, 100 * info.confident, 100 * info.fast,
+               info.median_lag, 100 * info.still_fraction, 100 * info.coverage,
+               vfs495_swipe_verdict_name (vfs495_swipe_verdict (img, &info)));
       if (!img)
         {
           g_print ("   %u bytes, %d lines: %s\n", stream->len, n, error->message);

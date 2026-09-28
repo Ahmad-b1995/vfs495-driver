@@ -558,6 +558,46 @@ resample (const double *img, int n, int w, const double *y, int *rows_out)
   return out;
 }
 
+/*
+ * Region measurements for diagnosing rejected swipes. gain holds each column's ridge contrast
+ * inside the region, before equalisation.
+ */
+static void
+measure_region (const int *lag, const double *conf, const gboolean *still, const double *gain, int n, int w,
+                int lo, int hi, Vfs495AssembleInfo *info)
+{
+  g_autofree double *lags = g_new (double, MAX (1, hi - lo));
+  g_autofree double *sorted = g_memdup2 (gain, w * sizeof (double));
+  int nconf = 0, nfast = 0, nlags = 0, nstill = 0, ncov = 0;
+  double p90;
+
+  for (int t = lo; t < hi; t++)
+    {
+      int target = CLAMP (t + lag[t], 0, n - 1);
+
+      nstill += still[t];
+      if (conf[t] < CONF_MIN)
+        continue;
+      nconf++;
+      if (lag[t] < MIN_TRUSTED_LAG)
+        nfast++;
+      if (!still[t] && !still[target] && lag[t] >= MIN_TRUSTED_LAG && lag[t] <= MAX_TRUSTED_LAG)
+        lags[nlags++] = lag[t];
+    }
+  qsort (sorted, w, sizeof (double), cmp_double);
+  p90 = sorted[(int) (0.9 * (w - 1))];
+  for (int c = 0; c < w; c++)
+    ncov += gain[c] > 0.35 * p90;
+
+  info->region_lines = hi - lo;
+  info->trusted = nlags;
+  info->still_fraction = (double) nstill / MAX (1, hi - lo);
+  info->confident = (double) nconf / MAX (1, hi - lo);
+  info->fast = (double) nfast / MAX (1, nconf);
+  info->median_lag = nlags ? median (lags, nlags) : 0;
+  info->coverage = (double) ncov / w;
+}
+
 guint8 *
 vfs495_assemble (const guint8 *lines8, int n, Vfs495AssembleInfo *info, GError **error)
 {
@@ -576,9 +616,10 @@ vfs495_assemble (const guint8 *lines8, int n, Vfs495AssembleInfo *info, GError *
   g_autofree double *absdev = NULL;
   g_autofree double *out = NULL;
   int lo, hi, first, last, rows, nbad, nseg;
-  double gain_med, lo_p, hi_p, still_count = 0;
+  double gain_med, lo_p, hi_p;
   guint8 *u8;
 
+  memset (info, 0, sizeof *info);
   if (n < 100)
     {
       g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "swipe too short");
@@ -610,6 +651,7 @@ vfs495_assemble (const guint8 *lines8, int n, Vfs495AssembleInfo *info, GError *
 
   estimate_lag (lines, n, lo, hi, lag, conf);
   stationary (hp, n, w, still);
+  measure_region (lag, conf, still, gain, n, w, lo, hi, info);
   y = positions (lag, conf, still, n, lo, hi, &first, &last, error);
   if (!y)
     return NULL;
@@ -648,12 +690,50 @@ vfs495_assemble (const guint8 *lines8, int n, Vfs495AssembleInfo *info, GError *
   for (gsize i = 0; i < (gsize) rows * w; i++)
     u8[i] = (guint8) CLAMP ((out[i] - lo_p) / (hi_p - lo_p) * 255.0, 0, 255);
 
-  for (int t = lo; t < hi; t++)
-    still_count += still[t];
   info->first_line = first;
   info->last_line = last;
   info->rows = rows;
   info->bad_columns = nbad;
-  info->still_fraction = still_count / MAX (1, hi - lo);
   return u8;
+}
+
+#define MIN_ROWS           80     /* a usable swipe stitches to ~150-400 rows */
+#define RESTING_STILL      0.9
+#define RESTING_TRUSTED    10
+#define MIN_COVERAGE       0.6
+#define MAX_FAST           0.25
+
+Vfs495SwipeVerdict
+vfs495_swipe_verdict (const guint8 *image, const Vfs495AssembleInfo *info)
+{
+  if (info->region_lines == 0)
+    return VFS495_SWIPE_TOO_SHORT;
+  if (info->still_fraction >= RESTING_STILL && info->trusted < RESTING_TRUSTED)
+    return VFS495_SWIPE_RESTING;
+  if (info->coverage < MIN_COVERAGE)
+    return VFS495_SWIPE_OFF_CENTRE;
+  if (info->fast >= MAX_FAST)
+    return VFS495_SWIPE_TOO_FAST;
+  if (!image || info->rows < MIN_ROWS)
+    return VFS495_SWIPE_TOO_SHORT;
+  return VFS495_SWIPE_OK;
+}
+
+const char *
+vfs495_swipe_verdict_name (Vfs495SwipeVerdict verdict)
+{
+  switch (verdict)
+    {
+    case VFS495_SWIPE_OK:
+      return "ok";
+    case VFS495_SWIPE_TOO_SHORT:
+      return "too short";
+    case VFS495_SWIPE_RESTING:
+      return "finger resting";
+    case VFS495_SWIPE_OFF_CENTRE:
+      return "off centre";
+    case VFS495_SWIPE_TOO_FAST:
+      return "too fast";
+    }
+  return "?";
 }

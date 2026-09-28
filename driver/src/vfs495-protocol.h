@@ -28,7 +28,14 @@
 #define VFS495_FLASH_SETTLE_MS   20
 
 #define VFS495_POLL_INTERVAL_MS  50    /* HP polls finger state about every 50 ms */
-#define VFS495_SWIPE_QUIET_MS    300   /* a swipe has ended when the data endpoint is quiet */
+/*
+ * A swipe has ended when the data endpoint stays quiet. Inside 19 measured swipes the longest
+ * pause was 4 ms (HP's recordings: 21 ms), but one early test swipe paused after its first
+ * 3 frames and continued within 200 ms, so the first frames get a longer window.
+ */
+#define VFS495_SWIPE_QUIET_START_MS  300
+#define VFS495_SWIPE_QUIET_MS        80
+#define VFS495_SWIPE_START_BYTES     (50 * 272)
 #define VFS495_SWIPE_LIMIT_MS    10000
 
 /*

@@ -1,6 +1,7 @@
 #include "vfs495-proto.h"
 
 #include <openssl/rand.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "vfs495-protocol.h"
@@ -80,6 +81,8 @@ typedef struct
   GByteArray   *out;
   guint         short_reads; /* the sensor ends a read short whenever it pauses, also mid-stream */
   gint64        last_data;  /* monotonic time of the last data */
+  GString      *gaps;       /* diagnostics: pauses over 25 ms, as offset:ms */
+  guint         max_gap_ms;
   GError       *error;
 } Reader;
 
@@ -116,8 +119,15 @@ read_cb (GObject *source, GAsyncResult *res, gpointer user_data)
 
       if (head->len > 0)
         {
+          gint64 now = g_get_monotonic_time ();
+          guint gap_ms = (guint) ((now - r->last_data) / 1000);
+
+          if (r->out->len > 0 && gap_ms > 25)
+            g_string_append_printf (r->gaps, " %u:%u", r->out->len / 272, gap_ms);
+          if (r->out->len > 0)
+            r->max_gap_ms = MAX (r->max_gap_ms, gap_ms);
           g_byte_array_append (r->out, head->buf, (guint) head->len);
-          r->last_data = g_get_monotonic_time ();
+          r->last_data = now;
         }
       if (head->len >= 0 && head->len < VFS495_READ_LEN)
         r->short_reads++;
@@ -146,6 +156,7 @@ reader_start (GUsbDevice *usb)
   r->cancel = g_cancellable_new ();
   r->out = g_byte_array_new ();
   r->last_data = g_get_monotonic_time ();
+  r->gaps = g_string_new (NULL);
   g_queue_init (&r->inflight);
   for (int i = 0; i < VFS495_READ_QUEUE; i++)
     reader_submit (r);
@@ -183,6 +194,7 @@ reader_stop (Reader *r, GError **error)
       out = NULL;
     }
   g_object_unref (r->cancel);
+  g_string_free (r->gaps, TRUE);
   g_free (r);
   return out;
 }
@@ -388,7 +400,10 @@ vfs495_session_wait_swipe (Vfs495Session *s, GCancellable *cancellable, GByteArr
   g_autoptr(GByteArray) out = NULL;
   g_autoptr(GError) local = NULL;
   gint64 end;
-  guint stream_len, r_short_reads;
+  guint stream_len, r_short_reads, max_gap_ms;
+  g_autofree char *gaps = NULL;
+  /* VFS495_QUIET_MS overrides both windows, to measure pauses */
+  const char *quiet_env = g_getenv ("VFS495_QUIET_MS");
   gboolean ok = TRUE;
 
   *stream = NULL;
@@ -422,11 +437,16 @@ vfs495_session_wait_swipe (Vfs495Session *s, GCancellable *cancellable, GByteArr
       r->last_data = g_get_monotonic_time ();
       end = r->last_data + (gint64) VFS495_SWIPE_LIMIT_MS * 1000;
       while (!r->error && g_get_monotonic_time () < end &&
-             g_get_monotonic_time () - r->last_data < VFS495_SWIPE_QUIET_MS * 1000)
+             g_get_monotonic_time () - r->last_data <
+               (gint64) 1000 * (quiet_env ? (guint) atoi (quiet_env) :
+                                r->out->len < VFS495_SWIPE_START_BYTES ? VFS495_SWIPE_QUIET_START_MS :
+                                VFS495_SWIPE_QUIET_MS))
         pump (5);
     }
   stream_len = r->out->len;
   r_short_reads = r->short_reads;
+  max_gap_ms = r->max_gap_ms;
+  gaps = g_strdup (r->gaps->str);
 
   if (!abort_capture (s, ok ? &local : NULL))
     ok = FALSE;
@@ -441,6 +461,8 @@ vfs495_session_wait_swipe (Vfs495Session *s, GCancellable *cancellable, GByteArr
     }
   g_debug ("stream %u bytes in %u short reads, %u more after the abort", stream_len, r_short_reads,
            out->len - stream_len);
+  if (stream_len > 0)
+    g_print ("   pauses: longest %u ms; over 25 ms at frame:ms%s\n", max_gap_ms, *gaps ? gaps : " none");
   g_byte_array_set_size (out, stream_len);
   if (out->len == 0 && g_cancellable_is_cancelled (cancellable))
     {

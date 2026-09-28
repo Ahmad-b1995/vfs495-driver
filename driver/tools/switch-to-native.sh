@@ -20,8 +20,7 @@ DROPIN=/etc/systemd/system/fprintd.service.d/vfs495.conf
 [ -n "$TOD_DIR" ] || { echo "libfprint TOD support not found (libfprint-2-tod-dev)" >&2; exit 1; }
 
 echo "1/5 installing the driver and its command data"
-install -D -m 0644 "$COMMANDS" /var/lib/vfs495-driver/commands.bin
-install -D -m 0644 "$MODULE" "$TOD_DIR/libfprint-tod-vfs495.so"
+"$ROOT/driver/tools/install-driver.sh"
 
 echo "2/5 removing vfs495-fprint (keeps HP's files in /var/lib/vfs495-fprint)"
 if dpkg -s vfs495-fprint >/dev/null 2>&1; then

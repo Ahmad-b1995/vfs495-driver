@@ -176,6 +176,38 @@ Findings:
 5. **A global alignment against HP's image is not a usable geometry metric**: small local speed
    errors accumulate and the correlation collapses, so it cannot guide fine tuning.
 
+## Swipe feedback and enrollment
+
+**Rejected swipes are retries, not failed matches.** fprintd restarts verification after a
+retry and pam_fprintd shows its message without using up an attempt, while a poor image that
+fails to match ends the attempt. The driver judges every swipe (`vfs495_swipe_verdict`) from
+measurements the stitcher takes of the finger region, and reports a retry for bad ones:
+
+| Verdict | Rule | Message (pam_fprintd) |
+|---|---|---|
+| finger resting | still >= 90% and < 10 trusted speed estimates | Remove your finger, and try swiping your finger again |
+| off centre | fewer than 60% of columns carry ridges | Your finger was not centered, try swiping your finger again |
+| too fast | >= 25% of confident lags below the trusted minimum | Swipe was too fast, try again |
+| too short | under 100 lines, no usable motion, or under 80 rows | Swipe was too short, try again |
+
+The limits sit between 44 normal swipes (three fingers, six sessions: at most 15% fast, at least
+88% coverage, at most 36% still), all judged ok, and 11 deliberately bad ones (fast: at least
+30% fast; off centre: at most 40% coverage; resting: 100% still, no motion), all judged
+correctly (`captures/diag/`). Rejecting them costs nothing: the bad swipes that still stitched to
+an image scored at most 36 against ten templates from another session, while the eight normal
+swipes of the same sitting scored 83-120.
+
+**A swipe ends after 80 ms of silence** (300 ms during its first 50 frames). The longest pause
+inside 19 measured swipes was 4 ms and in HP's recordings 21 ms; one early test swipe paused
+after its first 3 frames and resumed within 200 ms.
+
+**Enrollment takes 8 swipes** (libfprint's default for image devices is 5). Simulated with
+libfprint's matcher on 31 right-index swipes from five sessions (all 1640 pairs of 41 images
+scored), enrolling in one sitting and verifying with swipes from other sessions: 1 template
+missed 16.8% of good swipes, 5 templates 2.5%, 6 or more none. Other fingers never scored
+above 18 (40 is a match) against any number of templates. fprintd adds one swipe of its own
+before enrollment to refuse duplicates.
+
 ## Configuration programs
 
 The 17 distinct configuration programs (`02`) HP sends before and during finger capture are TLV
@@ -274,6 +306,8 @@ may matter across temperature or sensor units.
     during a swipe asks for a retry; suspend stops at the next poll and resume sets up again;
   - the module marks itself resident: its GType cannot be unregistered, and libfprint
     unloads TOD modules when its context is freed.
+- `driver/tools/install-driver.sh` installs or updates the driver for fprintd and has fprintd
+  log match scores; `driver/tools/scores.sh [SINCE]` summarises them.
 - `captures/` holds recordings. It is git-ignored: recordings contain the sensor serial,
   per-device keys and raw sensor data.
 

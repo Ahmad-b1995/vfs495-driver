@@ -22,8 +22,7 @@
 #define COMMANDS_PATH     "/var/lib/vfs495-driver/commands.bin"
 #define CMD_TIMEOUT_MS    3000
 #define REARM_AFTER_MS    50000   /* HP arms for at most 60 s; re-arm before that */
-#define COLLECT_TICK_MS   20
-#define MIN_ROWS          80      /* a usable swipe stitches to ~150-400 rows */
+#define COLLECT_TICK_MS   10
 
 G_DECLARE_FINAL_TYPE (FpiDeviceVfs495, fpi_device_vfs495, FPI, DEVICE_VFS495, FpImageDevice)
 
@@ -536,6 +535,7 @@ process_thread (GTask *task, gpointer source, gpointer task_data, GCancellable *
   g_autoptr(GError) error = NULL;
   g_autofree guint8 *lines = NULL;
   Vfs495AssembleInfo info = { 0 };
+  Vfs495SwipeVerdict verdict;
   int n = 0;
 
   lines = vfs495_decode_stream (in->stream->data, in->stream->len, in->key, in->iv, in->descramble, &n, &error);
@@ -543,24 +543,37 @@ process_thread (GTask *task, gpointer source, gpointer task_data, GCancellable *
     {
       fp_warn ("swipe stream: %s", error->message);
       res->retry = FP_DEVICE_RETRY_GENERAL;
+      g_task_return_pointer (task, res, process_result_free);
+      return;
     }
-  else if (!(res->pixels = vfs495_assemble (lines, n, &info, &error)))
+  res->pixels = vfs495_assemble (lines, n, &info, &error);
+  verdict = vfs495_swipe_verdict (res->pixels, &info);
+  fp_dbg ("swipe of %d lines: %s; region %d lines, %d rows, fast %.0f%%, still %.0f%%, coverage %.0f%%%s%s", n,
+          vfs495_swipe_verdict_name (verdict), info.region_lines, info.rows, 100 * info.fast,
+          100 * info.still_fraction, 100 * info.coverage, error ? "; " : "", error ? error->message : "");
+
+  /* A rejected swipe is reported as a retry, which fprintd answers by waiting for another
+   * swipe; a poor image would instead fail to match and use up the attempt. */
+  switch (verdict)
     {
-      fp_dbg ("swipe of %d lines: %s", n, error->message);
-      res->retry = FP_DEVICE_RETRY_TOO_SHORT;
-    }
-  else if (info.rows < MIN_ROWS)
-    {
-      fp_dbg ("swipe of %d lines stitched to only %d rows", n, info.rows);
-      g_clear_pointer (&res->pixels, g_free);
-      res->retry = FP_DEVICE_RETRY_TOO_SHORT;
-    }
-  else
-    {
+    case VFS495_SWIPE_OK:
       res->rows = info.rows;
-      fp_dbg ("swipe of %d lines: print lines %d-%d, %d rows, %d bad columns, still %.0f%%", n, info.first_line,
-              info.last_line, info.rows, info.bad_columns, 100 * info.still_fraction);
+      break;
+    case VFS495_SWIPE_RESTING:
+      res->retry = FP_DEVICE_RETRY_REMOVE_FINGER;
+      break;
+    case VFS495_SWIPE_OFF_CENTRE:
+      res->retry = FP_DEVICE_RETRY_CENTER_FINGER;
+      break;
+    case VFS495_SWIPE_TOO_FAST:
+      res->retry = FP_DEVICE_RETRY_TOO_FAST;
+      break;
+    case VFS495_SWIPE_TOO_SHORT:
+      res->retry = FP_DEVICE_RETRY_TOO_SHORT;
+      break;
     }
+  if (verdict != VFS495_SWIPE_OK)
+    g_clear_pointer (&res->pixels, g_free);
   g_task_return_pointer (task, res, process_result_free);
 }
 
@@ -732,8 +745,10 @@ capture_handler (FpiSsm *ssm, FpDevice *dev)
 
     case CAP_COLLECT:
       /* A short read is not the end of a swipe: the sensor flushes a short packet whenever it
-       * pauses. The swipe has ended when the endpoint stays quiet. */
-      if (self->read_error || now - self->last_data >= (gint64) VFS495_SWIPE_QUIET_MS * 1000 ||
+       * pauses. The swipe has ended when the endpoint stays quiet (see VFS495_SWIPE_QUIET_MS). */
+      if (self->read_error ||
+          now - self->last_data >= (gint64) 1000 * (self->stream->len < VFS495_SWIPE_START_BYTES ?
+                                                    VFS495_SWIPE_QUIET_START_MS : VFS495_SWIPE_QUIET_MS) ||
           now - self->finger_time >= (gint64) VFS495_SWIPE_LIMIT_MS * 1000)
         fpi_ssm_next_state (ssm);
       else
@@ -1098,6 +1113,10 @@ fpi_device_vfs495_class_init (FpiDeviceVfs495Class *klass)
   dev_class->type = FP_DEVICE_TYPE_USB;
   dev_class->id_table = id_table;
   dev_class->scan_type = FP_SCAN_TYPE_SWIPE;
+  /* Swipes vary more than touches. Simulated on 31 swipes from five sessions, enrolling in one
+   * sitting and verifying from others: 5 templates missed 2.5% of good swipes, 6 or more none;
+   * other fingers never scored above 18 of the 40 needed, however many templates. */
+  dev_class->nr_enroll_stages = 8;
   dev_class->suspend = dev_suspend;
   dev_class->resume = dev_resume;
 
