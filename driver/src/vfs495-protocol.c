@@ -400,3 +400,36 @@ vfs495_hex_prefix (const guint8 *data, gsize len, gsize max)
     g_string_append_printf (out, "%02x", data[i]);
   return g_string_free (out, FALSE);
 }
+
+guint8 *
+vfs495_patch_for_sensor (const guint8 *payload, gsize len, const guint8 *flash, gsize flash_len, gsize *out_len,
+                         GError **error)
+{
+  const gsize label_len = 8, hmac_len = 32, rsa_len = 256;
+  const guint8 *patch = payload + label_len;
+  gsize patch_len = len - label_len;
+  guint8 *out;
+
+  if (len < label_len + 5 + rsa_len || patch[0] != 0x06 || patch[1] != 0x02 || patch[3] != 0x00 || patch[4] != 0x01)
+    {
+      g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "not a signed patch");
+      return NULL;
+    }
+  for (gsize i = 0; flash && i + label_len + hmac_len <= flash_len; i++)
+    if (memcmp (flash + i, payload, label_len) == 0)
+      {
+        /* 06 | 02 00 | 20 00 | HMAC | body */
+        *out_len = 5 + hmac_len + (patch_len - 5 - rsa_len);
+        out = g_malloc (*out_len);
+        memcpy (out, patch, 3);
+        out[3] = (guint8) hmac_len;
+        out[4] = 0x00;
+        memcpy (out + 5, flash + i + label_len, hmac_len);
+        memcpy (out + 5 + hmac_len, patch + 5 + rsa_len, patch_len - 5 - rsa_len);
+        return out;
+      }
+  g_debug ("no cached signature for patch %02x%02x%02x%02x v%u in flash: sending it RSA-signed", payload[3],
+           payload[2], payload[1], payload[0], payload[4]);
+  *out_len = patch_len;
+  return g_memdup2 (patch, patch_len);
+}

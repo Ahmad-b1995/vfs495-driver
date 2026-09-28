@@ -12,7 +12,8 @@ captures/test-vectors/NAME.vec, a text file of hex fields, one per line:
                        first one starts with ChangeCipherSpec and the server Finished
 
 For a recording with a swipe (arming command followed by an image stream) it also writes
-NAME.stream (the encrypted stream as received) and NAME.key (image key and IV, 48 bytes).
+NAME.stream (the encrypted stream as received) and NAME.key (image key and IV, 48 bytes), and
+NAME.flash, the pre-session flash block (RSA key, cached patch signatures).
 
 These files hold session secrets and fingerprint data: they stay in the git-ignored captures/.
 
@@ -59,7 +60,9 @@ def vectors(name):
              f"server_random {pm['rand_0x40']}", f"master {keys['master']}", f"keyblock {keys['keyblock']}",
              f"handshake {hs}", f"finished {fin['out'][8:]}"]
     in_session, arm_key, stream, polling, swipe = False, None, bytearray(), False, None
-    for d, ep, data in load_wire(CAPTURES / f"wire.{name}.log"):
+    wire = load_wire(CAPTURES / f"wire.{name}.log")
+    flash = next((data for d, ep, data in wire if d == "IN" and ep == "02" and len(data) == 4096), None)
+    for d, ep, data in wire:
         if d == "OUT" and data[:3] == b"\x11\x54\x01":
             rtype, ct = records(data[3:])[2]
             plain, ok = client.open(rtype, ct)
@@ -87,6 +90,8 @@ def vectors(name):
             stream += data
     OUT.mkdir(exist_ok=True)
     (OUT / f"{name}.vec").write_text("\n".join(lines) + "\n")
+    if flash:
+        (OUT / f"{name}.flash").write_bytes(flash)
     msg = f"{name}: {sum(l.startswith('out') for l in lines)} client records, " \
           f"{sum(l.startswith('in') for l in lines)} server transfers"
     if swipe:

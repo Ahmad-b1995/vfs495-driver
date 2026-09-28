@@ -1,7 +1,8 @@
 /*
  * The command data file: the sensor's setup and capture commands in order, with the data
- * length the sensor sends after each and the column descramble table. Generated from a
- * decrypted recording by driver/tools/make-commands.py (format described there).
+ * length the sensor sends after each and the column descramble table. Built from HP's driver
+ * package by driver/recipe/build-commands.py, or from a decrypted recording by
+ * driver/tools/make-commands.py (format described there).
  */
 #pragma once
 
@@ -21,9 +22,14 @@ typedef enum {
   VFS495_PHASE_CLOSE,       /* restores the pre-session patch before close_notify */
 } Vfs495Phase;
 
+/* a signed patch: the payload is the flash label of its cached HMAC followed by the patch as
+ * HP ships it, RSA-signed (see vfs495_patch_for_sensor) */
+#define VFS495_FLAG_FLASH_SIGNATURE 0x01
+
 typedef struct
 {
   Vfs495Phase phase;
+  guint8      flags;
   guint32     data_len;     /* bytes the sensor sends on endpoint 0x82 after this command */
   guint16     key_offset;   /* offset of the 64-byte image-key field, 0xFFFF if none */
   GBytes     *payload;

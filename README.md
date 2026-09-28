@@ -16,9 +16,13 @@ polls for the finger, decrypts and decodes the swipe, and aborts cleanly
 (`research/session/capture.py`). Five consecutive swipes in one session all produced full,
 clear prints of the same finger. Setup takes 6.7 s once; re-arming between swipes 0.65 s.
 
-What still comes from HP: the firmware patch bodies and the configuration command payloads,
-taken from recordings of HP's tool. Open question for the driver: how to obtain those
-payloads at install time without redistributing them, and whether they differ between sensors.
+**No recording of HP's tool is needed any more.** The command data (firmware patches and
+configuration programs) is built from HP's own driver download, SoftPaq sp84530, by a recipe
+that holds no HP data (`driver/recipe/`, see "Command data from HP's package"). Built that
+way, it matches the data recorded from HP's tool on this machine byte for byte. The package
+build downloads and verifies the SoftPaq itself. Whether other VFS495 units need other
+patches is unknown without a second sensor; the driver handles a sensor that lacks this one's
+cached patch signatures (finding 23).
 
 **The libfprint driver works.** `driver/src/vfs495.c` is a libfprint TOD module: Ubuntu's own
 libfprint loads it, so no patched libfprint is needed. Through libfprint it opens the sensor in
@@ -130,10 +134,31 @@ Verified on an HP ZBook 17 G3, Ubuntu 25.10, sensor firmware 04.60.00.0104 Falco
     pauses, including a few frames into a swipe. Treating that as the end made the client
     abort while the sensor was still streaming (one swipe split in two, and once a sensor
     reset). A swipe ends after 300 ms without data.
-21. **The sensor reports a finger before streaming.** In HP's recordings and in open captures
-    the finger-state reply shows `02` when the stream starts; polling stops at the first `02`
-    or the first data. A finger resting without moving also triggers a capture; the stitcher
-    rejects it for lack of motion.
+21. **The finger-state poll does not reliably announce a swipe.** In HP's recordings the reply
+    shows `02` just before the stream starts, but in open captures the stream often started
+    between polls (up to 34 KB had arrived before the next poll). A poll that reaches the
+    sensor as it starts streaming makes it reset (finding 15); this happened twice in about 60
+    swipes. A finger resting without moving also triggers a capture; the stitcher rejects it
+    for lack of motion.
+22. **An armed sensor streams a swipe without any polls.** Eight swipes with no finger-state
+    polls after arming were all captured, complete and without sequence gaps. The driver no
+    longer polls: it arms, watches the data endpoint, and sends nothing until the swipe has
+    ended, so no command can collide with a starting stream.
+23. **The sensor accepts HP's RSA-signed patches as well as the cached-HMAC form.** Sent with
+    HP's RSA signature, the 1301-byte patch took 0.11 s longer and the sensor replied with
+    status and the 32-byte HMAC it computed, the value HP's software caches in the flash. The
+    driver sends the cached form when the flash has the patch's entry and the RSA-signed patch
+    otherwise.
+24. **HP's patch table names each patch by id and version.** `validity-sensor` holds tables of
+    0x60-byte entries (version at +0x20, id at +0x2c, size at +0x44, pointer at +0x48) for 27
+    patches in two families (this sensor uses id 0x4000 v2, 1 v7 and 0x80 v1). The flash cache
+    entry of a patch is labelled `u32 id, u8 version, "PS", ff` (HP's `LoadPatch` and
+    `xvfsIsPatchSignatureCached`).
+25. **The arming command's key field carries 96 per-session bytes.** Besides the image key and
+    IV (bytes 0-47), bytes 48-95 of the type 0x0006 field differ in every HP session; the
+    sensor accepts any value. The column descramble table is not stored in HP's program; it is
+    four reversed runs (sensor columns 0-199 to image columns 199-0, 200-241 to 262-221, 242 to
+    263, 243-263 to 220-200).
 
 ## Image quality (Phase 2, in progress)
 
@@ -210,6 +235,26 @@ scored), enrolling in one sitting and verifying with swipes from other sessions:
 missed 16.8% of good swipes, 5 templates 2.5%, 6 or more none. Other fingers never scored
 above 18 (40 is a match) against any number of templates. fprintd adds one swipe of its own
 before enrollment to refuse duplicates.
+
+## Command data from HP's package
+
+`driver/recipe/vfs495-recipe.json` describes the driver's 26 commands and the descramble table
+as parts: 290 bytes of literals (command bytes, TLV headers, flash-read parameters, the
+ClientHello frame, the finger-detection constants of the arming command and the 57-byte
+finger-detection setup), zero runs, byte ranges of HP's `validity-sensor` (the configuration
+programs), and patches by id, version, size and hash in HP's patch table.
+`driver/recipe/build-commands.py` builds the command file from `sp84530.tar` (MD5-checked), the
+RPM in it or the program (SHA-256-checked), reading the RPM and cpio archive in pure Python.
+
+Signed patches are stored with their flash label and HP's RSA signature; the driver sends the
+cached-HMAC form or the RSA-signed patch (finding 23). The per-session parts (ClientHello
+random, arming key field) are left zero and filled by the driver.
+
+Verification: built from the SoftPaq alone and sent as the driver sends it to this sensor, the
+command data equals the data recorded from HP's tool for all 26 commands (`meson test`,
+`recipe`); on the sensor, sessions open in 1.04 s and swipes are captured with it.
+`research/hpdata/make_recipe.py` derives the recipe from a recorded command file, and
+`research/hpdata/map_commands.py` shows which bytes of it occur in HP's files.
 
 ## Configuration programs
 
@@ -293,6 +338,10 @@ may matter across temperature or sensor units.
   `score_blocks.py` scores large sets in batches.
 - `research/patches/dump_hmac.py` is a gdb script that logs HP's patch-signature handling.
 - `research/tools/usblog.c` is the upstream libusb-0.1 logger with a thread-safety fix.
+- `research/hpdata/` maps the command data onto HP's package and derives the recipe;
+  `live-test.sh` and `nopoll-test.sh` are the sensor tests behind findings 22 and 23.
+- `driver/recipe/` builds the driver's command file from HP's download: the recipe,
+  `build-commands.py` and `hp_package.py` (reads SoftPaq sp84530, finds HP's patch table).
 - `driver/` is the C code for the libfprint driver, built with meson (`meson setup build/driver
   driver && ninja -C build/driver`; `-Dnative=true` tunes for the build machine, which makes no
   measurable difference). `driver/tools/make-commands.py` writes the command file the
@@ -308,21 +357,24 @@ may matter across temperature or sensor units.
     after a silence (finding 20, "Swipe feedback"); decoding and stitching run in a worker
     thread;
   - an error before a finger is reported triggers one silent reset and setup; an error
-    during a swipe asks for a retry; suspend stops at the next poll and resume sets up again;
+    during a swipe asks for a retry; suspend stops while waiting for a finger, and resume
+    sets up again;
   - the module marks itself resident: its GType cannot be unregistered, and libfprint
     unloads TOD modules when its context is freed.
-- `driver/packaging/build-deb.sh` builds the `vfs495-driver` package into `captures/` (it
-  contains the HP-derived command file, so it must not be shared); `driver/tools/install-driver.sh`
+- `driver/packaging/build-deb.sh` builds the `vfs495-driver` package into `build/deb/`, with
+  command data built from HP's download (it is HP-derived, so the package must not be
+  redistributed); `driver/tools/install-driver.sh`
   builds and installs it. The package has fprintd log match results, which `vfs495-scores
   [SINCE]` (`driver/tools/scores.sh`) summarises.
 - `driver/tests/` holds the regression tests (`meson test -C build/driver`, about 30 s). They
   check the driver's code against private data in `captures/` and skip without it: the SSLv3
   code against five recorded HP sessions (keys, Finished, and all 2525 client records
   re-encrypted byte for byte, all server replies MAC-checked), the command file's structure,
-  decoding of a swipe HP's tool received, and the stitcher's verdict and image for 57 saved
-  scans. `driver/tests/golden.txt` holds the expected verdicts, sizes and hashes; after an
-  intended change, `build/driver/vfs495-test --update driver/tests/golden.txt captures` updates
-  it. `driver/tests/make-vectors.py` extracts the session vectors from recordings.
+  decoding of a swipe HP's tool received, the command file built from HP's package against the
+  recorded one, and the stitcher's verdict and image for 57 saved scans.
+  `driver/tests/golden.txt` holds the expected verdicts, sizes and hashes; after an intended
+  change, `build/driver/vfs495-test --update driver/tests/golden.txt captures` updates it.
+  `driver/tests/make-vectors.py` extracts the session vectors from recordings.
 - `captures/` holds recordings. It is git-ignored: recordings contain the sensor serial,
   per-device keys and raw sensor data.
 

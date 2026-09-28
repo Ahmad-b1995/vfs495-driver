@@ -1,12 +1,14 @@
 #!/bin/bash
-# Build the vfs495-driver Debian package for this machine.
+# Build the vfs495-driver Debian package.
 #
-#   driver/packaging/build-deb.sh          -> captures/vfs495-driver_<version>_amd64.deb
-#   sudo apt install ./captures/vfs495-driver_<version>_amd64.deb
+#   driver/packaging/build-deb.sh          -> build/deb/vfs495-driver_<version>_amd64.deb
+#   sudo apt install ./build/deb/vfs495-driver_<version>_amd64.deb
 #
-# The package contains the command data derived from HP's software (captures/
-# vfs495-commands.bin), so it is written to the git-ignored captures/ folder and must not be
-# shared. It replaces vfs495-fprint (apt removes it) and turns on Ubuntu's fingerprint login.
+# The sensor's command data is built from HP's own driver download (SoftPaq sp84530, fetched
+# from HP and checksum-verified, or taken from $VFS495_HP_TAR) with driver/recipe/. The
+# package therefore contains data derived from HP's software: build it yourself, do not
+# redistribute it. It replaces vfs495-fprint (apt removes it) and turns on Ubuntu's
+# fingerprint login.
 #
 # libfprint-2-tod1 is pinned to 1.94.x: an incompatible libfprint would otherwise disable the
 # driver silently, while with the pin apt holds the upgrade back and says so. To allow a new
@@ -19,11 +21,22 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PKG="$ROOT/driver/packaging"
 BUILD="$ROOT/build/pkg"
 STAGE="$ROOT/build/pkg-root"
-COMMANDS="$ROOT/captures/vfs495-commands.bin"
+HP_CACHE="$ROOT/build/hp"
 TOD_MIN="1:1.94.9"
 TOD_MAX="1:1.95~"
 
-[ -f "$COMMANDS" ] || { echo "missing $COMMANDS: see driver/tools/make-commands.py" >&2; exit 1; }
+# HP's driver download: $VFS495_HP_TAR, an earlier download, or a fresh one from HP
+HP_TAR="${VFS495_HP_TAR:-}"
+for c in "$ROOT/captures/hp/sp84530.tar" "$HP_CACHE/sp84530.tar"; do
+	[ -n "$HP_TAR" ] || { [ -f "$c" ] && HP_TAR="$c"; }
+done
+if [ -z "$HP_TAR" ]; then
+	HP_TAR="$HP_CACHE/sp84530.tar"
+	mkdir -p "$HP_CACHE"
+	url="$(python3 -c "import sys; sys.path.insert(0, '$ROOT/driver/recipe'); import hp_package; print(hp_package.SOFTPAQ_URL)")"
+	echo "downloading HP's driver package (about 3 MB) from $url" >&2
+	curl -fsSL -o "$HP_TAR.part" "$url" && mv "$HP_TAR.part" "$HP_TAR"
+fi
 
 # a clean release build for generic x86-64 (no -march=native)
 rm -rf "$BUILD" "$STAGE"
@@ -35,7 +48,9 @@ MODULE="$STAGE$TOD_DIR/libfprint-tod-vfs495.so"
 
 install -D -m 0644 "$BUILD/libfprint-tod-vfs495.so" "$MODULE"
 strip --strip-unneeded "$MODULE"
-install -D -m 0644 "$COMMANDS" "$STAGE/usr/lib/vfs495-driver/commands.bin"
+install -d "$STAGE/usr/lib/vfs495-driver"
+python3 "$ROOT/driver/recipe/build-commands.py" "$HP_TAR" "$STAGE/usr/lib/vfs495-driver/commands.bin" >/dev/null
+chmod 0644 "$STAGE/usr/lib/vfs495-driver/commands.bin"
 install -D -m 0644 "$PKG/fprintd-vfs495-driver.conf" \
 	"$STAGE/usr/lib/systemd/system/fprintd.service.d/vfs495-driver.conf"
 install -D -m 0755 "$ROOT/driver/tools/scores.sh" "$STAGE/usr/bin/vfs495-scores"
@@ -48,8 +63,8 @@ Enroll:   fprintd-enroll -f right-index-finger
 Test:     fprintd-verify
 Scores:   vfs495-scores ["7 days ago"]
 
-/usr/lib/vfs495-driver/commands.bin is derived from HP's software for this reader and is
-for use on this machine only.
+/usr/lib/vfs495-driver/commands.bin was built from HP's driver download (SoftPaq sp84530)
+on this machine. It is derived from HP's software: do not redistribute this package.
 EOF
 gzip -9n -c "$ROOT/README.md" >"$STAGE/usr/share/doc/vfs495-driver/project-README.md.gz"
 
@@ -72,11 +87,12 @@ Section: misc
 Priority: optional
 Description: native libfprint driver for the Validity VFS495 fingerprint reader
  Loaded by libfprint's TOD support, so fprintd, GNOME and PAM use the reader directly.
- Contains command data derived from HP's software; for use on this machine only.
+ Contains command data built from HP's driver download; do not redistribute.
 EOF
 install -m 0755 "$PKG/postinst" "$PKG/postrm" "$STAGE/DEBIAN/"
 
-OUT="$ROOT/captures/vfs495-driver_${VERSION}_amd64.deb"
+mkdir -p "$ROOT/build/deb"
+OUT="$ROOT/build/deb/vfs495-driver_${VERSION}_amd64.deb"
 dpkg-deb --build --root-owner-group "$STAGE" "$OUT" >/dev/null
 echo "built $OUT"
 echo "install: sudo apt install $OUT"

@@ -13,6 +13,8 @@
  *             Finished, and every record of a recorded HP session, byte for byte
  *   decode    captures/test-vectors/NAME.stream + .key: a swipe HP's tool received
  *   swipe     a saved scan (PATH.lines.raw): stitcher verdict, size and image
+ *   recipe    captures/recipe/built.bin (driver/recipe/build-commands.py), as sent to this
+ *             sensor with the recorded flash block, equals the recorded command file
  */
 #include <gio/gio.h>
 #include <stdio.h>
@@ -204,6 +206,72 @@ test_crypto (const char *path)
   }
 }
 
+/* ---- command file built from HP's package ------------------------------------------------- */
+
+static void
+test_recipe (const char *captures, const Vfs495Commands *recorded)
+{
+  g_autofree char *built_path = g_build_filename (captures, "recipe", "built.bin", NULL);
+  g_autofree char *flash_path = g_build_filename (captures, "test-vectors", "nocal.flash", NULL);
+  g_autofree char *flash = NULL;
+  g_autoptr(GError) error = NULL;
+  Vfs495Commands *built;
+  gsize flash_len;
+  guint same = 0, patches = 0, fallback_ok = 0;
+
+  if (!recorded || !g_file_get_contents (flash_path, &flash, &flash_len, NULL))
+    {
+      skip ("recipe", "no recorded command file or flash block");
+      return;
+    }
+  if (!(built = vfs495_commands_load (built_path, &error)))
+    {
+      skip ("recipe", error->message);
+      return;
+    }
+  for (guint i = 0; i < MIN (built->commands->len, recorded->commands->len); i++)
+    {
+      const Vfs495Command *b = g_ptr_array_index (built->commands, i);
+      const Vfs495Command *r = g_ptr_array_index (recorded->commands, i);
+      gsize blen, rlen, slen = 0;
+      const guint8 *bp = g_bytes_get_data (b->payload, &blen);
+      const guint8 *rp = g_bytes_get_data (r->payload, &rlen);
+      g_autofree guint8 *sent = NULL;
+      g_autofree guint8 *want = g_memdup2 (rp, rlen);
+
+      if (b->flags & VFS495_FLAG_FLASH_SIGNATURE)
+        {
+          g_autofree guint8 *rsa = NULL;
+          gsize rsa_len = 0;
+
+          patches++;
+          sent = vfs495_patch_for_sensor (bp, blen, (guint8 *) flash, flash_len, &slen, NULL);
+          /* without a cached signature: HP's RSA-signed patch, unchanged */
+          rsa = vfs495_patch_for_sensor (bp, blen, NULL, 0, &rsa_len, NULL);
+          fallback_ok += rsa && rsa_len == blen - 8 && memcmp (rsa, bp + 8, rsa_len) == 0;
+        }
+      else
+        {
+          sent = g_memdup2 (bp, blen);
+          slen = blen;
+        }
+      /* per-session values: the ClientHello random, the arming key field */
+      if (r->phase == VFS495_PHASE_HELLO && rlen >= 46 && slen == rlen)
+        memset (want + 14, 0, 32), memset (sent + 14, 0, 32);
+      if (r->key_offset != VFS495_NO_KEY && (gsize) r->key_offset + VFS495_KEY_FIELD_LEN <= rlen && slen == rlen)
+        memset (want + r->key_offset, 0, VFS495_KEY_FIELD_LEN), memset (sent + r->key_offset, 0, VFS495_KEY_FIELD_LEN);
+      same += sent && b->phase == r->phase && b->data_len == r->data_len && b->key_offset == r->key_offset &&
+              slen == rlen && memcmp (sent, want, rlen) == 0;
+    }
+  {
+    g_autofree char *detail = g_strdup_printf ("%u/%u commands as recorded, %u/%u signed patches fall back to RSA",
+                                               same, recorded->commands->len, fallback_ok, patches);
+    result (built->commands->len == recorded->commands->len && same == recorded->commands->len && patches > 0 &&
+            fallback_ok == patches, "recipe", detail);
+  }
+  vfs495_commands_free (built);
+}
+
 /* ---- golden results ------------------------------------------------------------------------ */
 
 /* decode: "decode NAME FRAMES GAPS SHA" */
@@ -350,6 +418,7 @@ main (int argc, char **argv)
   cmds = test_commands (captures);
   if (!update)
     {
+      test_recipe (captures, cmds);
       vpath = g_build_filename (captures, "test-vectors", NULL);
       vdir = g_dir_open (vpath, 0, NULL);
       while (vdir && (entry = g_dir_read_name (vdir)))

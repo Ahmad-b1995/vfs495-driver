@@ -1,0 +1,435 @@
+{
+ "format": 1,
+ "comment": "Rebuilds the VFS495 command file from HP's SoftPaq sp84530 (driver/recipe/build-commands.py). Contains no HP data: parts are literals, zero runs, byte ranges of HP's validity-sensor, or HP patches by table id and version.",
+ "commands": [
+  {
+   "phase": "pre",
+   "parts": [
+    {
+     "hex": "01"
+    }
+   ]
+  },
+  {
+   "phase": "pre",
+   "parts": [
+    {
+     "hex": "19"
+    }
+   ]
+  },
+  {
+   "phase": "pre",
+   "parts": [
+    {
+     "hex": "06"
+    },
+    {
+     "patch": [
+      16384,
+      2,
+      692
+     ],
+     "sha256": "f67a9dee71caa242",
+     "signature": "rsa"
+    }
+   ]
+  },
+  {
+   "phase": "pre",
+   "parts": [
+    {
+     "hex": "01"
+    }
+   ]
+  },
+  {
+   "phase": "pre",
+   "data_len": 128,
+   "parts": [
+    {
+     "hex": "1f0100000080"
+    },
+    {
+     "zero": 109
+    },
+    {
+     "hex": "9f"
+    }
+   ]
+  },
+  {
+   "phase": "pre",
+   "data_len": 4096,
+   "parts": [
+    {
+     "hex": "1f050000000010"
+    },
+    {
+     "zero": 108
+    },
+    {
+     "hex": "0b00100000"
+    }
+   ]
+  },
+  {
+   "phase": "pre",
+   "parts": [
+    {
+     "hex": "06"
+    },
+    {
+     "patch": [
+      1,
+      7,
+      1524
+     ],
+     "sha256": "7585ef609530a3fc",
+     "signature": "flash"
+    }
+   ]
+  },
+  {
+   "phase": "pre",
+   "parts": [
+    {
+     "hex": "01"
+    }
+   ]
+  },
+  {
+   "phase": "hello",
+   "parts": [
+    {
+     "hex": "113c0016030000370100003303"
+    },
+    {
+     "zero": 33
+    },
+    {
+     "hex": "07"
+    },
+    {
+     "zero": 8
+    },
+    {
+     "hex": "0600440043004200"
+    }
+   ]
+  },
+  {
+   "phase": "setup",
+   "data_len": 524288,
+   "parts": [
+    {
+     "hex": "1f05000000000008"
+    },
+    {
+     "zero": 107
+    },
+    {
+     "hex": "0b08000000"
+    }
+   ]
+  },
+  {
+   "phase": "setup",
+   "parts": [
+    {
+     "hex": "1a"
+    }
+   ]
+  },
+  {
+   "phase": "setup",
+   "parts": [
+    {
+     "hex": "06"
+    },
+    {
+     "patch": [
+      128,
+      1,
+      628
+     ],
+     "sha256": "1315f419e4f44b74",
+     "signature": "flash"
+    }
+   ]
+  },
+  {
+   "phase": "setup",
+   "data_len": 288,
+   "key_offset": 2225,
+   "parts": [
+    {
+     "hex": "02200101"
+    },
+    {
+     "hp": [
+      1551935,
+      2205
+     ]
+    },
+    {
+     "hex": "15000800000000002028000006006a"
+    },
+    {
+     "zero": 102
+    },
+    {
+     "hex": "0300000401"
+    }
+   ]
+  },
+  {
+   "phase": "setup",
+   "parts": [
+    {
+     "hex": "1280020000fe030000ff1fff1f0000000018cea90318cead0318cea90318cead0318cea90320ff8000ff041f01"
+    },
+    {
+     "zero": 8
+    },
+    {
+     "hex": "38030000"
+    }
+   ]
+  },
+  {
+   "phase": "setup",
+   "data_len": 5712,
+   "key_offset": 2245,
+   "parts": [
+    {
+     "hex": "02100115"
+    },
+    {
+     "hp": [
+      1567583,
+      2221
+     ]
+    },
+    {
+     "hex": "1700000015000800000000002028000006006a"
+    },
+    {
+     "zero": 102
+    },
+    {
+     "hex": "0300000401"
+    }
+   ]
+  },
+  {
+   "phase": "setup",
+   "parts": [
+    {
+     "hex": "1a"
+    }
+   ]
+  },
+  {
+   "phase": "setup",
+   "parts": [
+    {
+     "hex": "06"
+    },
+    {
+     "patch": [
+      1,
+      7,
+      1524
+     ],
+     "sha256": "7585ef609530a3fc",
+     "signature": "flash"
+    }
+   ]
+  },
+  {
+   "phase": "setup",
+   "parts": [
+    {
+     "hex": "1a"
+    }
+   ]
+  },
+  {
+   "phase": "setup",
+   "parts": [
+    {
+     "hex": "06"
+    },
+    {
+     "patch": [
+      128,
+      1,
+      628
+     ],
+     "sha256": "1315f419e4f44b74",
+     "signature": "flash"
+    }
+   ]
+  },
+  {
+   "phase": "setup",
+   "data_len": 5712,
+   "key_offset": 2245,
+   "parts": [
+    {
+     "hex": "02100115"
+    },
+    {
+     "hp": [
+      1567583,
+      2221
+     ]
+    },
+    {
+     "hex": "1700000015000800000000002028000006006a"
+    },
+    {
+     "zero": 102
+    },
+    {
+     "hex": "0300000401"
+    }
+   ]
+  },
+  {
+   "phase": "rearm",
+   "parts": [
+    {
+     "hex": "1a"
+    }
+   ]
+  },
+  {
+   "phase": "rearm",
+   "parts": [
+    {
+     "hex": "06"
+    },
+    {
+     "patch": [
+      128,
+      1,
+      628
+     ],
+     "sha256": "1315f419e4f44b74",
+     "signature": "flash"
+    }
+   ]
+  },
+  {
+   "phase": "rearm",
+   "data_len": 5712,
+   "key_offset": 2245,
+   "parts": [
+    {
+     "hex": "02100115"
+    },
+    {
+     "hp": [
+      1567583,
+      2221
+     ]
+    },
+    {
+     "hex": "1700000015000800000000002028000006006a"
+    },
+    {
+     "zero": 102
+    },
+    {
+     "hex": "0300000401"
+    }
+   ]
+  },
+  {
+   "phase": "arm",
+   "key_offset": 2587,
+   "parts": [
+    {
+     "hex": "0210"
+    },
+    {
+     "hp": [
+      1998653,
+      2207
+     ]
+    },
+    {
+     "hex": "1b000c0001001701d102b30002100000170000001500080000000000202800001800520108000a000a0096001e0090010000c78044"
+    },
+    {
+     "zero": 321
+    },
+    {
+     "hex": "06006a"
+    },
+    {
+     "zero": 102
+    },
+    {
+     "hex": "0300000401"
+    }
+   ]
+  },
+  {
+   "phase": "close",
+   "parts": [
+    {
+     "hex": "1a"
+    }
+   ]
+  },
+  {
+   "phase": "close",
+   "parts": [
+    {
+     "hex": "06"
+    },
+    {
+     "patch": [
+      1,
+      7,
+      1524
+     ],
+     "sha256": "7585ef609530a3fc",
+     "signature": "flash"
+    }
+   ]
+  },
+  {
+   "phase": "descramble",
+   "descramble": [
+    [
+     0,
+     199,
+     199,
+     0
+    ],
+    [
+     200,
+     241,
+     262,
+     221
+    ],
+    [
+     242,
+     242,
+     263,
+     263
+    ],
+    [
+     243,
+     263,
+     220,
+     200
+    ]
+   ]
+  }
+ ]
+}

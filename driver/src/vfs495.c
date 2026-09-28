@@ -23,6 +23,7 @@
 #define CMD_TIMEOUT_MS    3000
 #define REARM_AFTER_MS    50000   /* HP arms for at most 60 s; re-arm before that */
 #define COLLECT_TICK_MS   10
+#define WAIT_TICK_MS      20      /* how often an armed sensor is checked for data */
 
 G_DECLARE_FINAL_TYPE (FpiDeviceVfs495, fpi_device_vfs495, FPI, DEVICE_VFS495, FpImageDevice)
 
@@ -82,10 +83,23 @@ command (FpiDeviceVfs495 *self, guint i)
   return g_ptr_array_index (self->cmds->commands, i);
 }
 
-static const guint8 *
-command_payload (const Vfs495Command *c, gsize *len)
+/* a command's bytes as sent: a copy, or for a signed patch (VFS495_FLAG_FLASH_SIGNATURE) the
+ * form this sensor takes (vfs495_patch_for_sensor); NULL with the ssm failed */
+static guint8 *
+command_bytes (FpiDeviceVfs495 *self, FpiSsm *ssm, guint i, gsize *len)
 {
-  return g_bytes_get_data (c->payload, len);
+  const Vfs495Command *c = command (self, i);
+  const guint8 *p = g_bytes_get_data (c->payload, len);
+  GError *error = NULL;
+  guint8 *out;
+
+  if (!(c->flags & VFS495_FLAG_FLASH_SIGNATURE))
+    return g_memdup2 (p, *len);
+  out = vfs495_patch_for_sensor (p, *len, self->flash ? self->flash->data : NULL, self->flash ? self->flash->len : 0,
+                                 len, &error);
+  if (!out)
+    fpi_ssm_mark_failed (ssm, error);
+  return out;
 }
 
 /* ---- command runner ------------------------------------------------------------------------
@@ -288,7 +302,7 @@ setup_handler (FpiSsm *ssm, FpDevice *dev)
   FpiDeviceVfs495 *self = FPI_DEVICE_VFS495 (dev);
   GUsbDevice *usb = fpi_device_get_usb_device (dev);
   GError *error = NULL;
-  const guint8 *p;
+  g_autofree guint8 *bytes = NULL;
   gsize len;
   gint i;
 
@@ -320,8 +334,8 @@ setup_handler (FpiSsm *ssm, FpDevice *dev)
           fpi_ssm_jump_to_state (ssm, SETUP_HELLO);
           return;
         }
-      p = command_payload (command (self, i), &len);
-      run_plain (ssm, self, p, len, command (self, i)->data_len);
+      if ((bytes = command_bytes (self, ssm, i, &len)))
+        run_plain (ssm, self, bytes, len, command (self, i)->data_len);
       break;
 
     case SETUP_PRE_DONE:
@@ -389,8 +403,8 @@ setup_handler (FpiSsm *ssm, FpDevice *dev)
           fpi_ssm_mark_completed (ssm);
           return;
         }
-      p = command_payload (command (self, i), &len);
-      run_session (ssm, self, p, len, command (self, i)->data_len);
+      if ((bytes = command_bytes (self, ssm, i, &len)))
+        run_session (ssm, self, bytes, len, command (self, i)->data_len);
       break;
 
     case SETUP_CONFIG_DONE:
@@ -608,10 +622,10 @@ process_done (GObject *source, GAsyncResult *result, gpointer user_data)
 }
 
 /* ---- capture loop ---------------------------------------------------------------------------
- * Arm, poll until the sensor reports a finger or streams, collect until the data endpoint is
- * quiet, abort, stop the reads, process. Never send a command while the sensor may be
- * streaming: it resets. Deactivation and suspend are honoured while polling; a swipe in
- * progress is always collected first. */
+ * Arm, wait until the sensor streams, collect until the data endpoint is quiet, abort, stop
+ * the reads, process. Never send a command while the sensor may be streaming: it resets.
+ * Deactivation and suspend are honoured while waiting; a swipe in progress is always
+ * collected first. */
 
 enum {
   CAP_SESSION,
@@ -619,8 +633,7 @@ enum {
   CAP_ARM,
   CAP_ARM_DONE,
   CAP_READ_START,
-  CAP_POLL,
-  CAP_POLL_DONE,
+  CAP_WAIT,
   CAP_FINGER,
   CAP_COLLECT,
   CAP_ABORT,
@@ -634,7 +647,7 @@ capture_handler (FpiSsm *ssm, FpDevice *dev)
 {
   FpiDeviceVfs495 *self = FPI_DEVICE_VFS495 (dev);
   gint64 now = g_get_monotonic_time ();
-  const guint8 *p;
+  g_autofree guint8 *bytes = NULL;
   gsize len;
   gint i;
 
@@ -667,28 +680,28 @@ capture_handler (FpiSsm *ssm, FpDevice *dev)
           fpi_ssm_jump_to_state (ssm, CAP_READ_START);
           return;
         }
-      p = command_payload (command (self, i), &len);
+      if (!(bytes = command_bytes (self, ssm, i, &len)))
+        return;
       if (command (self, i)->phase == VFS495_PHASE_ARM)
         {
-          g_autofree guint8 *armed = g_memdup2 (p, len);
           guint16 off = command (self, i)->key_offset;
 
-          if (off == VFS495_NO_KEY || (gsize) off + 64 > len || RAND_bytes (self->image_key, 32) != 1 ||
-              RAND_bytes (self->image_iv, 16) != 1 || RAND_bytes (armed + off + 48, 16) != 1)
+          if (off == VFS495_NO_KEY || (gsize) off + VFS495_KEY_FIELD_LEN > len || RAND_bytes (self->image_key, 32) != 1 ||
+              RAND_bytes (self->image_iv, 16) != 1 || RAND_bytes (bytes + off + 48, VFS495_KEY_FIELD_LEN - 48) != 1)
             {
               fpi_ssm_mark_failed (ssm, fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL,
                                                                   "cannot set the image key"));
               return;
             }
           /* the image stream is encrypted with key = field bytes 0-31, IV = bytes 32-47 */
-          memcpy (armed + off, self->image_key, 32);
-          memcpy (armed + off + 32, self->image_iv, 16);
-          run_session (ssm, self, armed, len, command (self, i)->data_len);
-          explicit_bzero (armed, len);
+          memcpy (bytes + off, self->image_key, 32);
+          memcpy (bytes + off + 32, self->image_iv, 16);
+          run_session (ssm, self, bytes, len, command (self, i)->data_len);
+          explicit_bzero (bytes, len);
         }
       else
         {
-          run_session (ssm, self, p, len, command (self, i)->data_len);
+          run_session (ssm, self, bytes, len, command (self, i)->data_len);
         }
       break;
 
@@ -705,10 +718,13 @@ capture_handler (FpiSsm *ssm, FpDevice *dev)
       fpi_ssm_next_state (ssm);
       break;
 
-    case CAP_POLL:
+    case CAP_WAIT:
+      /* No finger-state polls: the armed sensor starts streaming by itself, and a command that
+       * arrives as a stream starts makes it reset. So only watch for data (see README,
+       * finding 22). */
       if (self->stream->len > 0 || self->read_error)
         {
-          fpi_ssm_jump_to_state (ssm, CAP_FINGER);
+          fpi_ssm_next_state (ssm);
         }
       else if (self->deactivating || self->suspending)
         {
@@ -722,19 +738,8 @@ capture_handler (FpiSsm *ssm, FpDevice *dev)
         }
       else
         {
-          const guint8 poll = VFS495_CMD_FINGER_STATE;
-          run_session (ssm, self, &poll, 1, 0);
+          fpi_ssm_jump_to_state_delayed (ssm, CAP_WAIT, WAIT_TICK_MS);
         }
-      break;
-
-    case CAP_POLL_DONE:
-      if (!reply_ok (self, ssm))
-        return;
-      /* byte 0 after the status becomes 02 when the sensor starts a capture */
-      if (self->reply->len > 2 && self->reply->data[2] != 0)
-        fpi_ssm_next_state (ssm);
-      else
-        fpi_ssm_jump_to_state_delayed (ssm, CAP_POLL, VFS495_POLL_INTERVAL_MS);
       break;
 
     case CAP_FINGER:
@@ -899,7 +904,7 @@ close_handler (FpiSsm *ssm, FpDevice *dev)
 {
   FpiDeviceVfs495 *self = FPI_DEVICE_VFS495 (dev);
   const guint8 notify[2] = { 0x01, 0x00 };
-  const guint8 *p;
+  g_autofree guint8 *bytes = NULL;
   gsize len;
   gint i;
 
@@ -913,8 +918,8 @@ close_handler (FpiSsm *ssm, FpDevice *dev)
           fpi_ssm_jump_to_state (ssm, CLOSE_NOTIFY);
           return;
         }
-      p = command_payload (command (self, i), &len);
-      run_session (ssm, self, p, len, command (self, i)->data_len);
+      if ((bytes = command_bytes (self, ssm, i, &len)))
+        run_session (ssm, self, bytes, len, command (self, i)->data_len);
       break;
 
     case CLOSE_CMD_DONE:
@@ -1059,7 +1064,7 @@ dev_suspend (FpDevice *dev)
       self->session_open = FALSE;
       fpi_device_suspend_complete (dev, NULL);
     }
-  /* otherwise the capture loop stops at its next poll and completes the suspend */
+  /* otherwise the capture loop stops at its next check and completes the suspend */
 }
 
 static void

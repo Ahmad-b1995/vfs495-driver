@@ -19,6 +19,7 @@ struct _Vfs495Session
   gboolean              captured;      /* a capture ran since setup: re-arm before arming */
   guint8                image_key[32];
   guint8                image_iv[16];
+  GByteArray           *flash;         /* pre-session flash block: RSA key, patch signatures */
 };
 
 Vfs495Session *
@@ -37,6 +38,7 @@ vfs495_session_free (Vfs495Session *s)
   if (!s)
     return;
   g_object_unref (s->usb);
+  g_clear_pointer (&s->flash, g_byte_array_unref);
   vfs495_crypto_clear (&s->crypto);
   explicit_bzero (s, sizeof *s);
   g_free (s);
@@ -275,10 +277,20 @@ handshake (Vfs495Session *s, const guint8 modulus[VFS495_RSA_LEN], GBytes *hello
   return vfs495_crypto_finish (&s->crypto, resp->data, resp->len, error);
 }
 
+/* a command's bytes as sent; for a signed patch, the form this sensor takes */
+static guint8 *
+command_bytes (Vfs495Session *s, const Vfs495Command *c, gsize *len, GError **error)
+{
+  const guint8 *p = g_bytes_get_data (c->payload, len);
+
+  if (!(c->flags & VFS495_FLAG_FLASH_SIGNATURE))
+    return g_memdup2 (p, *len);
+  return vfs495_patch_for_sensor (p, *len, s->flash ? s->flash->data : NULL, s->flash ? s->flash->len : 0, len, error);
+}
+
 gboolean
 vfs495_session_open (Vfs495Session *s, GError **error)
 {
-  g_autoptr(GByteArray) flash = NULL;
   GBytes *hello = NULL;
 
   s->open = FALSE;
@@ -287,8 +299,10 @@ vfs495_session_open (Vfs495Session *s, GError **error)
     {
       Vfs495Command *c = g_ptr_array_index (s->cmds->commands, i);
       gsize len;
-      const guint8 *p = g_bytes_get_data (c->payload, &len);
+      g_autofree guint8 *p = NULL;
 
+      if ((c->phase == VFS495_PHASE_PRE || c->phase == VFS495_PHASE_SETUP) && !(p = command_bytes (s, c, &len, error)))
+        return FALSE;
       if (c->phase == VFS495_PHASE_PRE)
         {
           g_autoptr(GByteArray) reply = NULL;
@@ -304,17 +318,20 @@ vfs495_session_open (Vfs495Session *s, GError **error)
             g_debug ("pre-session %02x (%zu bytes): reply %s, data %u bytes", p[0], len, hex, data->len);
           }
           if (data->len == VFS495_FLASH_BLOCK_LEN)
-            flash = g_byte_array_ref (data);
+            {
+              g_clear_pointer (&s->flash, g_byte_array_unref);
+              s->flash = g_byte_array_ref (data);
+            }
         }
       else if (c->phase == VFS495_PHASE_HELLO)
         {
           hello = c->payload;
-          if (!flash)
+          if (!s->flash)
             {
               g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "sensor key not found in flash");
               return FALSE;
             }
-          if (!handshake (s, flash->data + VFS495_FLASH_KEY_OFFSET, hello, error))
+          if (!handshake (s, s->flash->data + VFS495_FLASH_KEY_OFFSET, hello, error))
             return FALSE;
         }
       else if (c->phase == VFS495_PHASE_SETUP)
@@ -340,19 +357,20 @@ vfs495_session_arm (Vfs495Session *s, GError **error)
     {
       Vfs495Command *c = g_ptr_array_index (s->cmds->commands, i);
       gsize len;
-      const guint8 *p = g_bytes_get_data (c->payload, &len);
+      guint8 cmd;
       g_autofree guint8 *payload = NULL;
       g_autoptr(GByteArray) reply = NULL;
       g_autoptr(GByteArray) data = g_byte_array_new ();
 
       if (!(c->phase == VFS495_PHASE_ARM || (c->phase == VFS495_PHASE_REARM && s->captured)))
         continue;
-      payload = g_memdup2 (p, len);
+      if (!(payload = command_bytes (s, c, &len, error)))
+        return FALSE;
       if (c->phase == VFS495_PHASE_ARM)
         {
-          if (c->key_offset == VFS495_NO_KEY || (gsize) c->key_offset + 64 > len ||
+          if (c->key_offset == VFS495_NO_KEY || (gsize) c->key_offset + VFS495_KEY_FIELD_LEN > len ||
               RAND_bytes (s->image_key, 32) != 1 || RAND_bytes (s->image_iv, 16) != 1 ||
-              RAND_bytes (payload + c->key_offset + 48, 16) != 1)
+              RAND_bytes (payload + c->key_offset + 48, VFS495_KEY_FIELD_LEN - 48) != 1)
             {
               g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "cannot set the image key");
               return FALSE;
@@ -360,9 +378,10 @@ vfs495_session_arm (Vfs495Session *s, GError **error)
           memcpy (payload + c->key_offset, s->image_key, 32);
           memcpy (payload + c->key_offset + 32, s->image_iv, 16);
         }
+      cmd = payload[0];
       reply = session_cmd (s, payload, len, CMD_TIMEOUT_MS, error);
       explicit_bzero (payload, len);
-      if (!reply || !check_status (reply, p[0], error))
+      if (!reply || !check_status (reply, cmd, error))
         return FALSE;
       if (!read_setup_data (s, c->data_len, data, error))
         return FALSE;
@@ -409,7 +428,11 @@ vfs495_session_wait_swipe (Vfs495Session *s, GCancellable *cancellable, GByteArr
   *stream = NULL;
   /* Poll finger state until the sensor starts a capture (byte 0 after the status becomes 02)
    * or data arrives. Never send a command while the sensor may be streaming: it resets. */
-  while (!g_cancellable_is_cancelled (cancellable))
+  /* The armed sensor streams a swipe by itself; finger-state polls (HP's method) only risk
+   * a command arriving as a stream starts. VFS495_POLL=1 polls like HP, for experiments. */
+  while (!g_getenv ("VFS495_POLL") && !g_cancellable_is_cancelled (cancellable) && !r->out->len && !r->error)
+    pump (VFS495_POLL_INTERVAL_MS);
+  while (g_getenv ("VFS495_POLL") && !g_cancellable_is_cancelled (cancellable))
     {
       g_autoptr(GByteArray) state = session_cmd (s, &poll, 1, CMD_TIMEOUT_MS, &local);
 
@@ -488,10 +511,15 @@ vfs495_session_close (Vfs495Session *s)
       g_autoptr(GByteArray) reply = NULL;
       g_autoptr(GError) error = NULL;
       gsize len;
-      const guint8 *p = g_bytes_get_data (c->payload, &len);
+      g_autofree guint8 *p = NULL;
 
       if (c->phase != VFS495_PHASE_CLOSE)
         continue;
+      if (!(p = command_bytes (s, c, &len, &error)))
+        {
+          g_debug ("closing command: %s", error->message);
+          continue;
+        }
       reply = session_cmd (s, p, len, CMD_TIMEOUT_MS, &error);
       if (!reply || !check_status (reply, p[0], &error))
         g_debug ("closing command %02x: %s", p[0], error->message);

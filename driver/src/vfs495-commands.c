@@ -42,6 +42,7 @@ vfs495_commands_load (const char *path, GError **error)
         goto truncated;
       c = g_new0 (Vfs495Command, 1);
       c->phase = (guint8) data[pos];
+      c->flags = (guint8) data[pos + 1];
       c->key_offset = GUINT16_FROM_LE (*(guint16 *) (data + pos + 2));
       c->data_len = GUINT32_FROM_LE (*(guint32 *) (data + pos + 4));
       c->payload = g_bytes_new (data + pos + 12, n);

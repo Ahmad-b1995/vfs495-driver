@@ -27,7 +27,8 @@
  */
 #define VFS495_FLASH_SETTLE_MS   20
 
-#define VFS495_POLL_INTERVAL_MS  50    /* HP polls finger state about every 50 ms */
+#define VFS495_POLL_INTERVAL_MS  50    /* HP polls finger state about every 50 ms; the driver does
+                                          not poll (README, finding 22) */
 /*
  * A swipe has ended when the data endpoint stays quiet. Inside 19 measured swipes the longest
  * pause was 4 ms (HP's recordings: 21 ms), but one early test swipe paused after its first
@@ -115,6 +116,25 @@ GByteArray *vfs495_crypto_open (Vfs495Crypto *c,
                                 const guint8 *reply,
                                 gsize         len,
                                 GError      **error);
+
+/*
+ * The bytes to send for a signed patch. The command file holds it as LABEL[8] followed by the
+ * patch command as HP ships it (06 | 02 00 | 00 01 | RSA signature[256] | body). LABEL (u32
+ * patch id, u8 version, "PS", ff) names the HMAC the sensor's firmware verified once and
+ * HP's software cached in the sensor's flash (40-byte entries: label, HMAC). With the entry in
+ * the pre-session flash block, the patch is sent as HP's tool sends it (06 | 02 00 | 20 00 |
+ * HMAC[32] | body); without it, with the RSA signature, which the sensor also accepts.
+ */
+guint8     *vfs495_patch_for_sensor (const guint8 *payload,
+                                     gsize         len,
+                                     const guint8 *flash,
+                                     gsize         flash_len,
+                                     gsize        *out_len,
+                                     GError      **error);
+
+/* the arming command's key field: bytes 0-31 image key, 32-47 IV, 48-95 random (HP sends
+ * fresh random data there every time; the sensor does not check it) */
+#define VFS495_KEY_FIELD_LEN     96
 
 /* replies start with a u16 status; 0 is success */
 gboolean    vfs495_check_status (const guint8 *reply,
