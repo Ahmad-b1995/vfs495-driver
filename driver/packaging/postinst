@@ -1,0 +1,15 @@
+#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+	# left by the manual install that preceded this package (driver/tools/install-driver.sh)
+	rm -f /etc/systemd/system/fprintd.service.d/vfs495-driver.conf
+	rmdir --ignore-fail-on-non-empty /etc/systemd/system/fprintd.service.d 2>/dev/null || true
+	rm -rf /var/lib/vfs495-driver
+	# first install: turn on Ubuntu's fingerprint login (later upgrades keep the admin's choice)
+	if [ -z "$2" ]; then
+		pam-auth-update --package --enable fprintd || true
+	fi
+	systemctl daemon-reload 2>/dev/null || true
+	systemctl try-restart fprintd 2>/dev/null || true
+fi
+exit 0

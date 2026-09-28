@@ -26,11 +26,12 @@ libfprint loads it, so no patched libfprint is needed. Through libfprint it open
 right index matched 4 of 4 verify swipes, and another finger matched 0 of 6. Waiting without a
 finger re-arms every 50 s; cancelling and closing leave the sensor clean.
 
-**It is installed and in use** on the ZBook: `driver/tools/switch-to-native.sh` replaced
-vfs495-fprint (HP's tool behind libfprint's virtual reader) with this driver and Ubuntu's own
-fingerprint login; fprintd enrolls and verifies with it. `driver/tools/rollback-to-vfs495-fprint.sh`
-undoes the switch. fprintd's enrollment takes one swipe more than libfprint's five stages: it
-first identifies the finger against existing prints to refuse duplicates.
+**It is installed and in use** on the ZBook as the `vfs495-driver` package
+(`sudo driver/tools/install-driver.sh` builds and installs it). It replaced vfs495-fprint (HP's
+tool behind libfprint's virtual reader) and uses Ubuntu's own fingerprint login; fprintd
+enrolls, verifies, unlocks and survives suspend with it. The package pins libfprint's TOD
+library to 1.94.x, so an incompatible libfprint update is held back by apt instead of silently
+disabling the reader. `driver/tools/rollback-to-vfs495-fprint.sh` goes back to vfs495-fprint.
 
 Verified on an HP ZBook 17 G3, Ubuntu 25.10, sensor firmware 04.60.00.0104 Falcon ROM.
 
@@ -291,23 +292,27 @@ may matter across temperature or sensor units.
 - `research/patches/dump_hmac.py` is a gdb script that logs HP's patch-signature handling.
 - `research/tools/usblog.c` is the upstream libusb-0.1 logger with a thread-safety fix.
 - `driver/` is the C code for the libfprint driver, built with meson (`meson setup build/driver
-  driver && ninja -C build/driver`). `driver/tools/make-commands.py` writes the command file the
+  driver && ninja -C build/driver`; `-Dnative=true` tunes for the build machine, which makes no
+  measurable difference). `driver/tools/make-commands.py` writes the command file the
   driver loads from a decrypted recording (it stays in `captures/`). `vfs495-tool capture
   captures/vfs495-commands.bin OUT 5 45` captures five swipes; `vfs495-tool assemble` stitches
   saved scan lines. The C stitcher matches `assemble.py` to within one grey level.
 - `driver/src/vfs495.c` is the libfprint driver, built as `build/driver/libfprint-tod-vfs495.so`.
-  It reads the command file from `/var/lib/vfs495-driver/commands.bin` (`$VFS495_COMMANDS`
+  It reads the command file from `/usr/lib/vfs495-driver/commands.bin` (`$VFS495_COMMANDS`
   overrides). `driver/tools/fp-test.py` runs it through libfprint without installing it
   (`list`, `open`, `capture`, `enroll`, `verify`). Driver design notes:
   - it resets the USB port on open (finding 16) and on recovery;
   - four data reads stay pending from arming until after the abort (finding 19); a swipe ends
-    after 300 ms of silence (finding 20); decoding and stitching run in a worker thread;
+    after a silence (finding 20, "Swipe feedback"); decoding and stitching run in a worker
+    thread;
   - an error before a finger is reported triggers one silent reset and setup; an error
     during a swipe asks for a retry; suspend stops at the next poll and resume sets up again;
   - the module marks itself resident: its GType cannot be unregistered, and libfprint
     unloads TOD modules when its context is freed.
-- `driver/tools/install-driver.sh` installs or updates the driver for fprintd and has fprintd
-  log match scores; `driver/tools/scores.sh [SINCE]` summarises them.
+- `driver/packaging/build-deb.sh` builds the `vfs495-driver` package into `captures/` (it
+  contains the HP-derived command file, so it must not be shared); `driver/tools/install-driver.sh`
+  builds and installs it. The package has fprintd log match results, which `vfs495-scores
+  [SINCE]` (`driver/tools/scores.sh`) summarises.
 - `captures/` holds recordings. It is git-ignored: recordings contain the sensor serial,
   per-device keys and raw sensor data.
 

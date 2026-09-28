@@ -19,7 +19,7 @@
 #include "vfs495-image.h"
 #include "vfs495-protocol.h"
 
-#define COMMANDS_PATH     "/var/lib/vfs495-driver/commands.bin"
+#define COMMANDS_PATH     "/usr/lib/vfs495-driver/commands.bin"   /* HP-derived; installed by the local package */
 #define CMD_TIMEOUT_MS    3000
 #define REARM_AFTER_MS    50000   /* HP arms for at most 60 s; re-arm before that */
 #define COLLECT_TICK_MS   10

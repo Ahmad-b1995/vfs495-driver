@@ -1,5 +1,5 @@
 project('vfs495-driver', 'c',
-  version: '0.1.0',
+  version: '0.2.0',
   default_options: ['c_std=gnu11', 'warning_level=2', 'buildtype=release'])
 
 cc = meson.get_compiler('c')
@@ -11,8 +11,10 @@ gusb = dependency('gusb')
 libcrypto = dependency('libcrypto')
 libfprint_tod = dependency('libfprint-2-tod-1')
 
-# Built for this machine only.
-add_project_arguments('-march=native', language: 'c')
+# -Dnative=true tunes for the build machine; packages are built for generic x86-64.
+if get_option('native')
+  add_project_arguments('-march=native', language: 'c')
+endif
 
 assemble = static_library('vfs495-assemble', 'src/vfs495-assemble.c',
   dependencies: [glib, gio, m],
