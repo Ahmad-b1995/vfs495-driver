@@ -40,3 +40,15 @@ shared_module('fprint-tod-vfs495', 'src/vfs495.c',
   gnu_symbol_visibility: 'hidden',
   install: true,
   install_dir: libfprint_tod.get_variable(pkgconfig: 'tod_driversdir'))
+
+# Regression tests. Their data (recordings, scans) is private and lives in the git-ignored
+# captures/ folder; tests without data are skipped. Update expectations after an intended
+# change with: build/driver/vfs495-test --update driver/tests/golden.txt captures
+tests = executable('vfs495-test', 'tests/vfs495-test.c',
+  include_directories: 'src',
+  link_with: [assemble, protocol],
+  dependencies: [glib, gio, libcrypto, m])
+test('regression', tests,
+  args: [meson.project_source_root() / 'tests' / 'golden.txt',
+         meson.project_source_root() / '..' / 'captures'],
+  timeout: 600)

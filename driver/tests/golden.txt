@@ -1,0 +1,63 @@
+# Expected results for vfs495-test (see driver/tests/vfs495-test.c). Paths are relative to
+# captures/, which is private; only verdicts, sizes and hashes are kept here.
+#   decode NAME FRAMES GAPS LINES-SHA          a swipe stream recorded from HP's tool
+#   swipe PATH VERDICT ROWS IMAGE-SHA           a saved scan through the stitcher
+# HP's own recording has 4 breaks in the frame sequence (the sensor skipped numbers, 97 frames
+# near the start); swipes read by this driver, with reads always queued, have none.
+decode swipe1 5204 4 4d6989ae8d1f8294
+swipe ctool/rest.1.lines.raw finger-resting 0 -
+swipe ctool/rindex.1.lines.raw ok 312 06c22595d60e1489
+swipe ctool/rindex.2.lines.raw ok 351 69d88af6e62fb96d
+swipe ctool/rindex.3.lines.raw ok 197 deee9fe5ef8c3473
+swipe ctool/rindex.4.lines.raw ok 231 261799913a28b186
+swipe ctool/rindex.5.lines.raw ok 147 63be558c86165d56
+swipe ctool/rindex.6.lines.raw ok 223 e2b2471cbb619935
+swipe diag/fast.1.lines.raw too-fast 165 b3558531563b3f2a
+swipe diag/fast.2.lines.raw too-short 0 -
+swipe diag/fast.3.lines.raw too-fast 140 234296f7e1f8ff33
+swipe diag/fast.4.lines.raw too-fast 90 eb4080372198c686
+swipe diag/fast.5.lines.raw too-fast 97 225338ce91cc73fd
+swipe diag/normal.1.lines.raw ok 362 6b99af849b432484
+swipe diag/normal.2.lines.raw ok 329 a653c68e8eca4403
+swipe diag/normal.3.lines.raw ok 407 28ee6f710b26191d
+swipe diag/normal.4.lines.raw ok 371 aa6c5d33eb3e1a5f
+swipe diag/normal.5.lines.raw ok 392 769ed0480de38d10
+swipe diag/normal.6.lines.raw ok 393 3c334be528ba9f05
+swipe diag/normal.7.lines.raw ok 395 62dcb29285dfca1c
+swipe diag/normal.8.lines.raw ok 392 cea3ba5aaab4675c
+swipe diag/offcentre.1.lines.raw off-centre 21 2e47bc9b94ae9c72
+swipe diag/offcentre.2.lines.raw off-centre 0 -
+swipe diag/offcentre.3.lines.raw off-centre 144 6a667af804e173ea
+swipe diag/offcentre.4.lines.raw too-short 0 -
+swipe diag/rest.1.lines.raw finger-resting 0 -
+swipe diag/rest.2.lines.raw finger-resting 0 -
+swipe lindex.195217.1.lines.raw ok 432 417d49c5212ce85f
+swipe lindex.195217.2.lines.raw ok 195 a7ab3dcd883a2a9e
+swipe lindex.195217.3.lines.raw ok 363 e5744c20ecb9e032
+swipe lindex.195217.4.lines.raw ok 288 30228c1eb34ddd67
+swipe lindex.195217.5.lines.raw ok 369 ad02642de836e4bc
+swipe nocal.221058.1.lines.raw ok 337 4004ed607298437b
+swipe nocal.221058.2.lines.raw ok 270 b1c8c9e55b8a1bb4
+swipe nocal.221058.3.lines.raw ok 328 6dcbc2948c91d124
+swipe nocal.221058.4.lines.raw ok 450 4a212506c7c67fd9
+swipe nocal.221058.5.lines.raw ok 346 d02f26f4e9785799
+swipe open.182746.1.lines.raw ok 274 c8082e475a1e763b
+swipe open.182746.2.lines.raw ok 340 9e897ead8a465437
+swipe open.182746.3.lines.raw ok 260 fbd989e6fb95d565
+swipe open.182746.4.lines.raw ok 317 cc76ae47bdc515a5
+swipe open.182746.5.lines.raw ok 352 10bfa401660b572f
+swipe refset/hp.1.lines.raw ok 207 65065b0d664378d7
+swipe refset/hp.2.lines.raw ok 237 c1e5026cc4ee4327
+swipe refset/hp.3.lines.raw ok 285 05da6f61d9246544
+swipe refset/hp.4.lines.raw ok 381 964e12731d124017
+swipe refset/hp.5.lines.raw ok 198 67c40b0854ccba04
+swipe refset/hp.6.lines.raw ok 337 eccc5ff16cedc607
+swipe refset/hp.7.lines.raw ok 314 b3d352e1c6a03ff7
+swipe refset/hp.8.lines.raw ok 412 7a4028dc2d641b26
+swipe refset/hp.9.lines.raw ok 265 bedd5dfafa829e57
+swipe refset/hp.10.lines.raw ok 246 64861b759dba262c
+swipe rmiddle.195127.1.lines.raw ok 468 ece583374441e2c3
+swipe rmiddle.195127.2.lines.raw ok 387 3a36986b40c29496
+swipe rmiddle.195127.3.lines.raw ok 429 e97230470a225ac3
+swipe rmiddle.195127.4.lines.raw ok 329 6924975ac4bdea6c
+swipe rmiddle.195127.5.lines.raw ok 259 7f05b6dddaeb773b

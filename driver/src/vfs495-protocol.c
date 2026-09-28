@@ -251,6 +251,29 @@ vfs495_crypto_hello (Vfs495Crypto *c, GBytes *hello_template, GError **error)
   return msg;
 }
 
+void
+vfs495_crypto_derive (Vfs495Crypto *c, const guint8 premaster[48], const guint8 client_random[32],
+                      const guint8 server_random[32], guint8 master[48], guint8 keyblock[136])
+{
+  ssl3_prf (premaster, 48, client_random, server_random, master, 48);
+  ssl3_prf (master, 48, server_random, client_random, keyblock, 136);
+  memcpy (c->client.mac_key, keyblock, 20);
+  memcpy (c->server.mac_key, keyblock + 20, 20);
+  memcpy (c->client.key, keyblock + 40, 32);
+  memcpy (c->server.key, keyblock + 72, 32);
+  memcpy (c->client.iv, keyblock + 104, 16);
+  memcpy (c->server.iv, keyblock + 120, 16);
+  c->client.seq = c->server.seq = 0;
+}
+
+void
+vfs495_crypto_finished (const guint8 master[48], const guint8 *handshake, gsize len, guint8 out[36])
+{
+  const guint8 label[4] = { 0x54, 0x4e, 0x4c, 0x43 };   /* 0x434C4E54 little-endian */
+
+  ssl3_finished (master, handshake, len, label, out);
+}
+
 GByteArray *
 vfs495_crypto_key_exchange (Vfs495Crypto *c, const guint8 *sh, gsize sh_len, const guint8 modulus_le[RSA_LEN],
                             GError **error)
@@ -258,7 +281,6 @@ vfs495_crypto_key_exchange (Vfs495Crypto *c, const guint8 *sh, gsize sh_len, con
   guint8 enc[RSA_LEN], master[48], keyblock[136], fin[36];
   guint8 cke_hs[4 + RSA_LEN] = { 0x10, 0x00, 0x01, 0x00 };
   guint8 fin_hs[4 + 36] = { 0x14, 0x00, 0x00, 0x24 };
-  const guint8 label[4] = { 0x54, 0x4e, 0x4c, 0x43 };   /* 0x434C4E54 little-endian */
   const guint8 ccs[6] = { 0x14, 0x03, 0x00, 0x00, 0x01, 0x01 };
   const guint8 *server_random = sh + 11;
   g_autoptr(GByteArray) hs = g_byte_array_new ();
@@ -281,20 +303,12 @@ vfs495_crypto_key_exchange (Vfs495Crypto *c, const guint8 *sh, gsize sh_len, con
     return NULL;
   memcpy (cke_hs + 4, enc, RSA_LEN);
 
-  ssl3_prf (c->premaster, 48, c->client_random, server_random, master, 48);
-  ssl3_prf (master, 48, server_random, c->client_random, keyblock, 136);
-  memcpy (c->client.mac_key, keyblock, 20);
-  memcpy (c->server.mac_key, keyblock + 20, 20);
-  memcpy (c->client.key, keyblock + 40, 32);
-  memcpy (c->server.key, keyblock + 72, 32);
-  memcpy (c->client.iv, keyblock + 104, 16);
-  memcpy (c->server.iv, keyblock + 120, 16);
-  c->client.seq = c->server.seq = 0;
+  vfs495_crypto_derive (c, c->premaster, c->client_random, server_random, master, keyblock);
 
   g_byte_array_append (hs, c->hello->data, c->hello->len);
   g_byte_array_append (hs, sh + 5, MIN (sh_hs_len, sh_len - 5));
   g_byte_array_append (hs, cke_hs, sizeof cke_hs);
-  ssl3_finished (master, hs->data, hs->len, label, fin);
+  vfs495_crypto_finished (master, hs->data, hs->len, fin);
   memcpy (fin_hs + 4, fin, 36);
   fin_rec = record_seal (&c->client, 0x16, fin_hs, sizeof fin_hs);
 

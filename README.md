@@ -118,12 +118,14 @@ Verified on an HP ZBook 17 G3, Ubuntu 25.10, sensor firmware 04.60.00.0104 Falco
 18. **The sensor resets if a command follows a flash read (`1f`) at once.** 1 ms of delay was
     enough in tests. HP never waits less than 12 ms (128-byte read) or 20 ms (4096-byte read);
     the driver waits 20 ms.
-19. **Swipe streams are whole 272-byte frames** (every capture so far), but a quarter of them end
-    on a 64-byte boundary with no short packet. The driver keeps four 1088-byte reads pending on
-    the data endpoint from arming until after the abort, with no timeout. 1088 is the least
-    common multiple of the packet and frame sizes, so every read either fills or ends on a
-    short packet and no read is left holding part of a stream. Six swipes read this way had no
-    sequence gaps.
+19. **Swipe streams are whole 272-byte frames** (every capture so far; the last one is a status
+    frame, `01 01 00 14 ...`), but a quarter of them end on a 64-byte boundary with no short
+    packet. The driver keeps four 1088-byte reads pending on the data endpoint from arming
+    until after the abort, with no timeout. 1088 is the least common multiple of the packet
+    and frame sizes, so every read either fills or ends on a short packet and no read is left
+    holding part of a stream. Every swipe read this way had consecutive frame sequence
+    numbers. HP's own recording of a swipe has 4 breaks (97 frames missing near the start),
+    consistent with the sensor dropping lines when the host reads too slowly.
 20. **A short read is not the end of a swipe.** The sensor flushes a short packet whenever it
     pauses, including a few frames into a swipe. Treating that as the end made the client
     abort while the sensor was still streaming (one swipe split in two, and once a sensor
@@ -313,6 +315,14 @@ may matter across temperature or sensor units.
   contains the HP-derived command file, so it must not be shared); `driver/tools/install-driver.sh`
   builds and installs it. The package has fprintd log match results, which `vfs495-scores
   [SINCE]` (`driver/tools/scores.sh`) summarises.
+- `driver/tests/` holds the regression tests (`meson test -C build/driver`, about 30 s). They
+  check the driver's code against private data in `captures/` and skip without it: the SSLv3
+  code against five recorded HP sessions (keys, Finished, and all 2525 client records
+  re-encrypted byte for byte, all server replies MAC-checked), the command file's structure,
+  decoding of a swipe HP's tool received, and the stitcher's verdict and image for 57 saved
+  scans. `driver/tests/golden.txt` holds the expected verdicts, sizes and hashes; after an
+  intended change, `build/driver/vfs495-test --update driver/tests/golden.txt captures` updates
+  it. `driver/tests/make-vectors.py` extracts the session vectors from recordings.
 - `captures/` holds recordings. It is git-ignored: recordings contain the sensor serial,
   per-device keys and raw sensor data.
 

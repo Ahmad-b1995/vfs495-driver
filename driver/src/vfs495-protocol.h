@@ -85,6 +85,18 @@ GByteArray *vfs495_crypto_key_exchange (Vfs495Crypto *c,
                                         const guint8  modulus_le[VFS495_RSA_LEN],
                                         GError      **error);
 
+/* the key derivation and Finished computation of step 2, for tests against recorded sessions */
+void        vfs495_crypto_derive (Vfs495Crypto *c,
+                                  const guint8  premaster[48],
+                                  const guint8  client_random[32],
+                                  const guint8  server_random[32],
+                                  guint8        master_out[48],
+                                  guint8        keyblock_out[136]);
+void        vfs495_crypto_finished (const guint8  master[48],
+                                    const guint8 *handshake,
+                                    gsize         len,
+                                    guint8        out[36]);
+
 /* step 3: check the sensor's reply: ChangeCipherSpec, its Finished and one unsolicited
  * record, which must be decrypted to keep the IV and sequence number in step */
 gboolean    vfs495_crypto_finish (Vfs495Crypto *c,

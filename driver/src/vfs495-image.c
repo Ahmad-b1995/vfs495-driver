@@ -8,7 +8,7 @@
 
 guint8 *
 vfs495_decode_stream (const guint8 *stream, gsize len, const guint8 key[32], const guint8 iv[16],
-                      const guint16 *descramble, int *n_lines, GError **error)
+                      const guint16 *descramble, int *n_lines, Vfs495DecodeInfo *info, GError **error)
 {
   gsize usable = len - len % 16;
   g_autofree guint8 *plain = g_malloc (usable + 16);
@@ -52,6 +52,8 @@ vfs495_decode_stream (const guint8 *stream, gsize len, const guint8 key[32], con
         }
     }
   g_debug ("decoded %u frames, %u sequence gaps, %u stray bytes", frames, gaps, stray);
+  if (info)
+    *info = (Vfs495DecodeInfo) { frames, gaps, stray };
   *n_lines = lines->len / VFS495_LINE_WIDTH;
   return g_byte_array_free (lines, FALSE);
 }

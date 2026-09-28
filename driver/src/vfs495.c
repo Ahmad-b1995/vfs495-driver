@@ -536,9 +536,11 @@ process_thread (GTask *task, gpointer source, gpointer task_data, GCancellable *
   g_autofree guint8 *lines = NULL;
   Vfs495AssembleInfo info = { 0 };
   Vfs495SwipeVerdict verdict;
+  Vfs495DecodeInfo decoded = { 0 };
   int n = 0;
 
-  lines = vfs495_decode_stream (in->stream->data, in->stream->len, in->key, in->iv, in->descramble, &n, &error);
+  lines = vfs495_decode_stream (in->stream->data, in->stream->len, in->key, in->iv, in->descramble, &n, &decoded,
+                                &error);
   if (!lines)
     {
       fp_warn ("swipe stream: %s", error->message);
@@ -548,7 +550,8 @@ process_thread (GTask *task, gpointer source, gpointer task_data, GCancellable *
     }
   res->pixels = vfs495_assemble (lines, n, &info, &error);
   verdict = vfs495_swipe_verdict (res->pixels, &info);
-  fp_dbg ("swipe of %d lines: %s; region %d lines, %d rows, fast %.0f%%, still %.0f%%, coverage %.0f%%%s%s", n,
+  fp_dbg ("swipe of %d lines (%u sequence gaps): %s; region %d lines, %d rows, fast %.0f%%, still %.0f%%, "
+          "coverage %.0f%%%s%s", n, decoded.gaps,
           vfs495_swipe_verdict_name (verdict), info.region_lines, info.rows, 100 * info.fast,
           100 * info.still_fraction, 100 * info.coverage, error ? "; " : "", error ? error->message : "");
 

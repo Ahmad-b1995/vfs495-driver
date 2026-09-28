@@ -193,7 +193,7 @@ cmd_capture (int argc, char **argv)
 
       t0 = g_get_monotonic_time ();
       vfs495_session_image_key (s, key, iv);
-      lines = vfs495_decode_stream (stream->data, stream->len, key, iv, cmds->descramble, &n, &error);
+      lines = vfs495_decode_stream (stream->data, stream->len, key, iv, cmds->descramble, &n, NULL, &error);
       if (!lines)
         goto out;
       write_lines_raw (raw, lines, n, NULL);
