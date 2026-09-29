@@ -12,4 +12,14 @@ if [ "$1" = configure ]; then
 	systemctl daemon-reload 2>/dev/null || true
 	systemctl try-restart fprintd 2>/dev/null || true
 fi
+# after installing, and after every upgrade of libfprint (file triggers): is the reader usable?
+if [ "$1" = configure ] || [ "$1" = triggered ]; then
+	if ! vfs495-check --quiet; then
+		echo "" >&2
+		echo "*** vfs495-driver: fingerprint login will not work until the driver is rebuilt. ***" >&2
+		echo "" >&2
+		logger -p auth.warning -t vfs495-driver \
+			"libfprint does not load the VFS495 driver; rebuild it: driver/tools/install-driver.sh" 2>/dev/null || true
+	fi
+fi
 exit 0

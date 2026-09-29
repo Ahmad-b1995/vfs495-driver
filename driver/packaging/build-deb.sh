@@ -10,10 +10,13 @@
 # redistribute it. It replaces vfs495-fprint (apt removes it) and turns on Ubuntu's
 # fingerprint login.
 #
-# libfprint-2-tod1 is pinned to 1.94.x: an incompatible libfprint would otherwise disable the
-# driver silently, while with the pin apt holds the upgrade back and says so. To allow a new
-# libfprint version, rebuild against it, test with driver/tools/fp-test.py, and raise
-# TOD_MAX below.
+# libfprint is not capped at a version: TOD modules keep working across libfprint releases
+# (this one, built against 1.94.9, loads unchanged in 1.95.1), and a cap made Ubuntu's release
+# upgrade remove the package. Instead the package watches libfprint's libraries (dpkg file
+# triggers) and runs vfs495-check after every upgrade of them, which warns in apt's output and
+# the system log if libfprint no longer loads the driver. A release upgrade can still remove
+# the package (26.04 renamed libgusb2, which the build had depended on); an apt hook kept as a
+# configuration file then warns after every apt run until the driver is rebuilt.
 set -euo pipefail
 umask 022
 
@@ -23,7 +26,6 @@ BUILD="$ROOT/build/pkg"
 STAGE="$ROOT/build/pkg-root"
 HP_CACHE="$ROOT/build/hp"
 TOD_MIN="1:1.94.9"
-TOD_MAX="1:1.95~"
 
 # HP's driver download: $VFS495_HP_TAR, an earlier download, or a fresh one from HP
 HP_TAR="${VFS495_HP_TAR:-}"
@@ -54,6 +56,10 @@ chmod 0644 "$STAGE/usr/lib/vfs495-driver/commands.bin"
 install -D -m 0644 "$PKG/fprintd-vfs495-driver.conf" \
 	"$STAGE/usr/lib/systemd/system/fprintd.service.d/vfs495-driver.conf"
 install -D -m 0755 "$ROOT/driver/tools/scores.sh" "$STAGE/usr/bin/vfs495-scores"
+install -D -m 0755 "$ROOT/driver/tools/check.py" "$STAGE/usr/bin/vfs495-check"
+# configuration files survive removal of the package: the hook warns if an upgrade removed it
+install -D -m 0755 "$PKG/apt-hook.sh" "$STAGE/etc/vfs495-driver/apt-hook.sh"
+install -D -m 0644 "$PKG/apt-hook.conf" "$STAGE/etc/apt/apt.conf.d/80vfs495-driver"
 install -d "$STAGE/usr/share/doc/vfs495-driver"
 cat >"$STAGE/usr/share/doc/vfs495-driver/README" <<EOF
 vfs495-driver $VERSION: native libfprint driver for the Validity VFS495 fingerprint reader
@@ -62,6 +68,7 @@ vfs495-driver $VERSION: native libfprint driver for the Validity VFS495 fingerpr
 Enroll:   fprintd-enroll -f right-index-finger
 Test:     fprintd-verify
 Scores:   vfs495-scores ["7 days ago"]
+Check:    vfs495-check        (runs by itself after every libfprint upgrade)
 
 /usr/lib/vfs495-driver/commands.bin was built from HP's driver download (SoftPaq sp84530)
 on this machine. It is derived from HP's software: do not redistribute this package.
@@ -81,7 +88,7 @@ Version: $VERSION
 Architecture: amd64
 Maintainer: Ahmad <ahmad.b1995@gmail.com>
 Installed-Size: $(du -sk --exclude=DEBIAN "$STAGE" | cut -f1)
-Depends: $SHLIBS, libfprint-2-tod1 (>= $TOD_MIN), libfprint-2-tod1 (<< $TOD_MAX), fprintd, libpam-fprintd
+Depends: $SHLIBS, libfprint-2-tod1 (>= $TOD_MIN), fprintd, libpam-fprintd, python3
 Conflicts: vfs495-fprint
 Section: misc
 Priority: optional
@@ -90,6 +97,12 @@ Description: native libfprint driver for the Validity VFS495 fingerprint reader
  Contains command data built from HP's driver download; do not redistribute.
 EOF
 install -m 0755 "$PKG/postinst" "$PKG/postrm" "$STAGE/DEBIAN/"
+# run vfs495-check whenever libfprint's libraries are upgraded
+LIBDIR="$(pkg-config --variable=libdir libfprint-2-tod-1)"
+printf 'interest-noawait %s\n' "$LIBDIR/libfprint-2-tod.so.1" "$LIBDIR/libfprint-2.so.2" >"$STAGE/DEBIAN/triggers"
+chmod 0644 "$STAGE/DEBIAN/triggers"
+printf '%s\n' /etc/vfs495-driver/apt-hook.sh /etc/apt/apt.conf.d/80vfs495-driver >"$STAGE/DEBIAN/conffiles"
+chmod 0644 "$STAGE/DEBIAN/conffiles"
 
 mkdir -p "$ROOT/build/deb"
 OUT="$ROOT/build/deb/vfs495-driver_${VERSION}_amd64.deb"

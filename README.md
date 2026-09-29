@@ -33,9 +33,18 @@ finger re-arms every 50 s; cancelling and closing leave the sensor clean.
 **It is installed and in use** on the ZBook as the `vfs495-driver` package
 (`sudo driver/tools/install-driver.sh` builds and installs it). It replaced vfs495-fprint (HP's
 tool behind libfprint's virtual reader) and uses Ubuntu's own fingerprint login; fprintd
-enrolls, verifies, unlocks and survives suspend with it. The package pins libfprint's TOD
-library to 1.94.x, so an incompatible libfprint update is held back by apt instead of silently
-disabling the reader. `driver/tools/rollback-to-vfs495-fprint.sh` goes back to vfs495-fprint.
+enrolls, verifies, unlocks and survives suspend with it. `driver/tools/rollback-to-vfs495-fprint.sh`
+goes back to vfs495-fprint.
+
+**Surviving upgrades.** The upgrade to Ubuntu 26.04 removed the package: it capped libfprint
+at 1.94.x (26.04 has 1.95.1), and it depended on `libgusb2`, which 26.04 renamed `libgusb2a`.
+The driver itself was fine: the module built against 1.94.9 loads unchanged in 1.95.1, as the
+TOD interface is meant to. The package no longer caps libfprint; after every upgrade of
+libfprint's libraries a dpkg trigger runs `vfs495-check`, which warns in apt's output and the
+system log if libfprint stops loading the driver; and an apt hook, kept as a configuration file
+so it outlives the package, warns after every apt run if the package was removed, with the
+command that rebuilds it. The module is linked against libfprint-2 with `-z defs`, so a symbol
+libfprint does not export fails the build.
 
 Verified on an HP ZBook 17 G3, Ubuntu 25.10, sensor firmware 04.60.00.0104 Falcon ROM.
 
@@ -365,7 +374,8 @@ may matter across temperature or sensor units.
   command data built from HP's download (it is HP-derived, so the package must not be
   redistributed); `driver/tools/install-driver.sh`
   builds and installs it. The package has fprintd log match results, which `vfs495-scores
-  [SINCE]` (`driver/tools/scores.sh`) summarises.
+  [SINCE]` (`driver/tools/scores.sh`) summarises; `vfs495-check` (`driver/tools/check.py`)
+  reports whether libfprint loads the driver.
 - `driver/tests/` holds the regression tests (`meson test -C build/driver`, about 30 s). They
   check the driver's code against private data in `captures/` and skip without it: the SSLv3
   code against five recorded HP sessions (keys, Finished, and all 2525 client records

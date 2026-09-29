@@ -1,5 +1,5 @@
 project('vfs495-driver', 'c',
-  version: '0.3.0',
+  version: '0.3.1',
   default_options: ['c_std=gnu11', 'warning_level=2', 'buildtype=release'])
 
 cc = meson.get_compiler('c')
@@ -10,6 +10,7 @@ m = cc.find_library('m')
 gusb = dependency('gusb')
 libcrypto = dependency('libcrypto')
 libfprint_tod = dependency('libfprint-2-tod-1')
+libfprint = dependency('libfprint-2')
 
 # -Dnative=true tunes for the build machine; packages are built for generic x86-64.
 if get_option('native')
@@ -33,10 +34,14 @@ executable('vfs495-tool', 'src/vfs495-tool.c', 'src/vfs495-proto.c',
 
 # The libfprint driver, loaded by libfprint's TOD loader from
 # libfprint_tod.get_variable('tod_driversdir') (or $FP_TOD_DRIVERS_DIR).
+# Linked against libfprint-2 too (fp_image_new and the image device type are public API), so
+# the module resolves every symbol through its own dependencies, whatever the host process;
+# -z defs turns a symbol the libraries do not export into a build error.
 shared_module('fprint-tod-vfs495', 'src/vfs495.c',
   link_with: [assemble, protocol],
-  dependencies: [libfprint_tod, glib, gio, gmodule, gusb, libcrypto, m],
+  dependencies: [libfprint_tod, libfprint, glib, gio, gmodule, gusb, libcrypto, m],
   c_args: ['-Wno-unused-parameter'],
+  link_args: ['-Wl,-z,defs'],
   gnu_symbol_visibility: 'hidden',
   install: true,
   install_dir: libfprint_tod.get_variable(pkgconfig: 'tod_driversdir'))
