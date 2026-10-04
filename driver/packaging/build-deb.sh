@@ -53,8 +53,15 @@ strip --strip-unneeded "$MODULE"
 install -d "$STAGE/usr/lib/vfs495-driver"
 python3 "$ROOT/driver/recipe/build-commands.py" "$HP_TAR" "$STAGE/usr/lib/vfs495-driver/commands.bin" >/dev/null
 chmod 0644 "$STAGE/usr/lib/vfs495-driver/commands.bin"
-install -D -m 0644 "$PKG/fprintd-vfs495-driver.conf" \
-	"$STAGE/usr/lib/systemd/system/fprintd.service.d/vfs495-driver.conf"
+# fprintd's drop-in: logging for vfs495-scores, and fprintd kept running instead of exiting
+# after 30 s idle, so unlocking does not wait about 0.3 s for it to start (fprintd only opens
+# the reader while an operation runs)
+FPRINTD="$(sed -n 's/^ExecStart=\([^ ]*\).*/\1/p' /usr/lib/systemd/system/fprintd.service | head -n1)"
+[ -x "$FPRINTD" ] || { echo "cannot find fprintd's program in its systemd unit" >&2; exit 1; }
+install -d "$STAGE/usr/lib/systemd/system/fprintd.service.d"
+{ cat "$PKG/fprintd-vfs495-driver.conf"; printf 'ExecStart=\nExecStart=%s --no-timeout\n' "$FPRINTD"; } \
+	>"$STAGE/usr/lib/systemd/system/fprintd.service.d/vfs495-driver.conf"
+chmod 0644 "$STAGE/usr/lib/systemd/system/fprintd.service.d/vfs495-driver.conf"
 install -D -m 0755 "$ROOT/driver/tools/scores.sh" "$STAGE/usr/bin/vfs495-scores"
 install -D -m 0755 "$ROOT/driver/tools/check.py" "$STAGE/usr/bin/vfs495-check"
 install -D -m 0644 "$PKG/pam-config" "$STAGE/usr/share/pam-configs/vfs495-driver"

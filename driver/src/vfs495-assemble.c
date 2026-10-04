@@ -355,6 +355,77 @@ finger_region (const double *hp, int n, int w, int *lo, int *hi)
     }
 }
 
+typedef struct
+{
+  const double *aux;      /* unit aux rows */
+  const double *hp;       /* high-passed main rows */
+  int           n, lo, hi, a, b;
+  double       *best;     /* per column offset: best correlation for lines lo..hi-1 */
+  int          *best_lag; /* and the first lag that reached it */
+  gint          next;     /* next column offset to take (atomic) */
+} LagJob;
+
+/* the best lag of every line for one column offset c0 of the aux line over the main line */
+static void
+lag_for_offset (const LagJob *j, int c0, double *best, int *best_lag, double *m, double *p, double *c)
+{
+  const int rows_end = MIN (j->n, j->b + MAX_LAG);
+
+  /* line t is compared with main row t + tau, so rows up to b - 1 + MAX_LAG are needed */
+  for (int r = j->a; r < rows_end; r++)
+    unit_row (j->hp + (gsize) r * VFS495_MAIN_WIDTH + c0, m + (gsize) (r - j->a) * AUX_WIDTH, AUX_WIDTH);
+  for (int t = j->lo; t < j->hi; t++)
+    {
+      best[t - j->lo] = -1.0;
+      best_lag[t - j->lo] = 0;
+    }
+  for (int tau = 1; tau <= MAX_LAG; tau++)
+    {
+      for (int t = j->a; t < j->b; t++)
+        {
+          if (t + tau >= j->n)
+            {
+              p[t] = -1.0;
+              continue;
+            }
+          const double *x = j->aux + (gsize) t * AUX_WIDTH;
+          const double *y = m + (gsize) (t + tau - j->a) * AUX_WIDTH;
+          double s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+          for (int k = 0; k < AUX_WIDTH; k += 4)
+            {
+              s0 += x[k] * y[k];
+              s1 += x[k + 1] * y[k + 1];
+              s2 += x[k + 2] * y[k + 2];
+              s3 += x[k + 3] * y[k + 3];
+            }
+          p[t] = (s0 + s1) + (s2 + s3);
+        }
+      box_filter_range (p, c, j->n, WINDOW, j->lo, j->hi);
+      for (int t = j->lo; t < j->hi; t++)
+        if (c[t] > best[t - j->lo])
+          {
+            best[t - j->lo] = c[t];
+            best_lag[t - j->lo] = tau;
+          }
+    }
+}
+
+/* takes column offsets until none are left; the offsets are independent */
+static gpointer
+lag_worker (gpointer data)
+{
+  LagJob *j = data;
+  const int span = MAX (1, j->hi - j->lo);
+  g_autofree double *m = g_new (double, (gsize) MAX (1, MIN (j->n, j->b + MAX_LAG) - j->a) * AUX_WIDTH);
+  g_autofree double *p = g_new (double, j->n);
+  g_autofree double *c = g_new (double, j->n);
+  int k;
+
+  while ((k = g_atomic_int_add (&j->next, 1)) <= C0_LAST - C0_FIRST)
+    lag_for_offset (j, C0_FIRST + k, j->best + (gsize) k * span, j->best_lag + (gsize) k * span, m, p, c);
+  return NULL;
+}
+
 /*
  * Per-line lag between aux and main lines, with a correlation confidence, for lines lo..hi-1.
  * Correlations are computed on [lo - WINDOW/2, hi + WINDOW/2) only, which is all the moving
@@ -369,9 +440,6 @@ estimate_lag (const double *lines, int n, int lo, int hi, int *lag, double *conf
   g_autofree double *main_part = g_new (double, (gsize) n * VFS495_MAIN_WIDTH);
   g_autofree double *aux_part = g_new (double, (gsize) n * AUX_WIDTH);
   g_autofree double *aux = g_new (double, (gsize) n * AUX_WIDTH);
-  g_autofree double *m = g_new (double, (gsize) n * AUX_WIDTH);
-  g_autofree double *p = g_new (double, n);
-  g_autofree double *c = g_new (double, n);
   g_autofree double *hp = NULL;
   g_autofree double *aux_hp = NULL;
 
@@ -387,46 +455,39 @@ estimate_lag (const double *lines, int n, int lo, int hi, int *lag, double *conf
   for (int r = 0; r < n; r++)
     unit_row (aux_hp + (gsize) r * AUX_WIDTH, aux + (gsize) r * AUX_WIDTH, AUX_WIDTH);
 
-  for (int r = 0; r < n; r++)
-    {
-      conf[r] = -1.0;
-      lag[r] = 0;
-    }
-  for (int c0 = C0_FIRST; c0 <= C0_LAST; c0++)
-    {
-      /* line t is compared with main row t + tau, so rows up to b - 1 + MAX_LAG are needed */
-      for (int r = a; r < MIN (n, b + MAX_LAG); r++)
-        unit_row (hp + (gsize) r * VFS495_MAIN_WIDTH + c0, m + (gsize) r * AUX_WIDTH, AUX_WIDTH);
-      for (int tau = 1; tau <= MAX_LAG; tau++)
+  {
+    LagJob job = { aux, hp, n, lo, hi, a, b, NULL, NULL, 0 };
+    const int n_offsets = C0_LAST - C0_FIRST + 1;
+    const int n_threads = CLAMP ((int) g_get_num_processors (), 1, n_offsets);
+    GThread *threads[C0_LAST - C0_FIRST + 1];
+
+    job.best = g_new (double, (gsize) n_offsets * MAX (1, hi - lo));
+    job.best_lag = g_new (int, (gsize) n_offsets * MAX (1, hi - lo));
+    for (int i = 0; i < n_threads; i++)
+      threads[i] = g_thread_new ("vfs495-lag", lag_worker, &job);
+    for (int i = 0; i < n_threads; i++)
+      g_thread_join (threads[i]);
+
+    /* merge in offset order with a strict comparison: the first maximum in (offset, lag)
+     * order wins, exactly as one loop over offsets and lags would choose */
+    for (int r = 0; r < n; r++)
+      {
+        conf[r] = -1.0;
+        lag[r] = 0;
+      }
+    for (int k = 0; k < n_offsets; k++)
+      for (int t = lo; t < hi; t++)
         {
-          for (int t = a; t < b; t++)
+          gsize i = (gsize) k * (hi - lo) + (t - lo);
+          if (job.best[i] > conf[t])
             {
-              if (t + tau >= n)
-                {
-                  p[t] = -1.0;
-                  continue;
-                }
-              const double *x = aux + (gsize) t * AUX_WIDTH;
-              const double *y = m + (gsize) (t + tau) * AUX_WIDTH;
-              double s0 = 0, s1 = 0, s2 = 0, s3 = 0;
-              for (int k = 0; k < AUX_WIDTH; k += 4)
-                {
-                  s0 += x[k] * y[k];
-                  s1 += x[k + 1] * y[k + 1];
-                  s2 += x[k + 2] * y[k + 2];
-                  s3 += x[k + 3] * y[k + 3];
-                }
-              p[t] = (s0 + s1) + (s2 + s3);
+              conf[t] = job.best[i];
+              lag[t] = job.best_lag[i];
             }
-          box_filter_range (p, c, n, WINDOW, lo, hi);
-          for (int t = lo; t < hi; t++)
-            if (c[t] > conf[t])
-              {
-                conf[t] = c[t];
-                lag[t] = tau;
-              }
         }
-    }
+    g_free (job.best);
+    g_free (job.best_lag);
+  }
 }
 
 /* True where a line nearly repeats the line STILL_LAG earlier: the finger is not moving. */

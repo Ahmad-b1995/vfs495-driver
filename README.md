@@ -175,7 +175,11 @@ Verified on an HP ZBook 17 G3, Ubuntu 25.10, sensor firmware 04.60.00.0104 Falco
     marked "omit" in the recipe, and resets the port only when the `01` status shows patches
     left from an earlier session, or after an error. Arming during a swipe does not capture
     it: with a finger swiping back and forth, the first data came 1.3 s after arming, so the
-    sensor waits for a finger to arrive.
+    sensor waits for a finger to arrive. Measured in fprintd, the reader was ready 0.53 s after
+    the claim instead of 1.38 s. Two more savings: the stitcher's lag search (250-300 ms of
+    about 340 ms) runs its 22 column offsets on all CPU cores and merges them in order, so the
+    images are byte-identical and stitching takes 0.15 s instead of 0.4 s; and fprintd runs with
+    `--no-timeout`, so unlocking does not wait about 0.3 s for it to start after 30 s idle.
 27. **The lock screen's fingerprint attempt runs under `common-auth`.** GNOME starts both
     `gdm-password` (which includes `common-auth`, where Ubuntu's fprintd profile allows one
     try in 10 s) and `gdm-fingerprint` (3 tries); the password conversation claims the reader
