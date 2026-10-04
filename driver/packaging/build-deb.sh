@@ -7,8 +7,8 @@
 # The sensor's command data is built from HP's own driver download (SoftPaq sp84530, fetched
 # from HP and checksum-verified, or taken from $VFS495_HP_TAR) with driver/recipe/. The
 # package therefore contains data derived from HP's software: build it yourself, do not
-# redistribute it. It replaces vfs495-fprint (apt removes it) and turns on Ubuntu's
-# fingerprint login.
+# redistribute it. It replaces vfs495-fprint (apt removes it) and turns on fingerprint login
+# with its own PAM profile (2 tries instead of Ubuntu's 1).
 #
 # libfprint is not capped at a version: TOD modules keep working across libfprint releases
 # (this one, built against 1.94.9, loads unchanged in 1.95.1), and a cap made Ubuntu's release
@@ -57,6 +57,7 @@ install -D -m 0644 "$PKG/fprintd-vfs495-driver.conf" \
 	"$STAGE/usr/lib/systemd/system/fprintd.service.d/vfs495-driver.conf"
 install -D -m 0755 "$ROOT/driver/tools/scores.sh" "$STAGE/usr/bin/vfs495-scores"
 install -D -m 0755 "$ROOT/driver/tools/check.py" "$STAGE/usr/bin/vfs495-check"
+install -D -m 0644 "$PKG/pam-config" "$STAGE/usr/share/pam-configs/vfs495-driver"
 # configuration files survive removal of the package: the hook warns if an upgrade removed it
 install -D -m 0755 "$PKG/apt-hook.sh" "$STAGE/etc/vfs495-driver/apt-hook.sh"
 install -D -m 0644 "$PKG/apt-hook.conf" "$STAGE/etc/apt/apt.conf.d/80vfs495-driver"
@@ -96,7 +97,7 @@ Description: native libfprint driver for the Validity VFS495 fingerprint reader
  Loaded by libfprint's TOD support, so fprintd, GNOME and PAM use the reader directly.
  Contains command data built from HP's driver download; do not redistribute.
 EOF
-install -m 0755 "$PKG/postinst" "$PKG/postrm" "$STAGE/DEBIAN/"
+install -m 0755 "$PKG/postinst" "$PKG/prerm" "$PKG/postrm" "$STAGE/DEBIAN/"
 # run vfs495-check whenever libfprint's libraries are upgraded
 LIBDIR="$(pkg-config --variable=libdir libfprint-2-tod-1)"
 printf 'interest-noawait %s\n' "$LIBDIR/libfprint-2-tod.so.1" "$LIBDIR/libfprint-2.so.2" >"$STAGE/DEBIAN/triggers"

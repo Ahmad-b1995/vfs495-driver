@@ -83,6 +83,8 @@ typedef struct
   GByteArray   *out;
   guint         short_reads; /* the sensor ends a read short whenever it pauses, also mid-stream */
   gint64        last_data;  /* monotonic time of the last data */
+  gint64        started;    /* when the reads were queued (just after arming) */
+  gint64        first_data; /* when the first data arrived, 0 before */
   GString      *gaps;       /* diagnostics: pauses over 25 ms, as offset:ms */
   guint         max_gap_ms;
   GError       *error;
@@ -128,6 +130,8 @@ read_cb (GObject *source, GAsyncResult *res, gpointer user_data)
             g_string_append_printf (r->gaps, " %u:%u", r->out->len / 272, gap_ms);
           if (r->out->len > 0)
             r->max_gap_ms = MAX (r->max_gap_ms, gap_ms);
+          if (!r->first_data)
+            r->first_data = now;
           g_byte_array_append (r->out, head->buf, (guint) head->len);
           r->last_data = now;
         }
@@ -157,7 +161,7 @@ reader_start (GUsbDevice *usb)
   r->usb = usb;
   r->cancel = g_cancellable_new ();
   r->out = g_byte_array_new ();
-  r->last_data = g_get_monotonic_time ();
+  r->last_data = r->started = g_get_monotonic_time ();
   r->gaps = g_string_new (NULL);
   g_queue_init (&r->inflight);
   for (int i = 0; i < VFS495_READ_QUEUE; i++)
@@ -293,14 +297,27 @@ vfs495_session_open (Vfs495Session *s, GError **error)
 {
   GBytes *hello = NULL;
 
+  /* experiments: VFS495_SKIP="9,15" leaves out commands by file index; VFS495_TIMING prints
+   * how long each command takes */
+  g_auto(GStrv) skip = g_strsplit (g_getenv ("VFS495_SKIP") ? g_getenv ("VFS495_SKIP") : "", ",", -1);
+  gboolean timing = g_getenv ("VFS495_TIMING") != NULL;
+
   s->open = FALSE;
   s->captured = FALSE;
   for (guint i = 0; i < s->cmds->commands->len; i++)
     {
       Vfs495Command *c = g_ptr_array_index (s->cmds->commands, i);
+      g_autofree char *index = g_strdup_printf ("%u", i);
+      gint64 t0 = g_get_monotonic_time ();
       gsize len;
       g_autofree guint8 *p = NULL;
 
+      if (g_strv_contains ((const char *const *) skip, index))
+        {
+          if (timing)
+            g_print ("   #%-2u skipped\n", i);
+          continue;
+        }
       if ((c->phase == VFS495_PHASE_PRE || c->phase == VFS495_PHASE_SETUP) && !(p = command_bytes (s, c, &len, error)))
         return FALSE;
       if (c->phase == VFS495_PHASE_PRE)
@@ -345,6 +362,10 @@ vfs495_session_open (Vfs495Session *s, GError **error)
             return FALSE;
           settle_after (p[0]);
         }
+      if (timing && c->phase <= VFS495_PHASE_SETUP)
+        g_print ("   #%-2u %-5s %02x %6zu B + %6u B data: %6.1f ms\n", i,
+                 c->phase == VFS495_PHASE_PRE ? "pre" : c->phase == VFS495_PHASE_HELLO ? "hello" : "setup",
+                 p ? p[0] : 0x11, p ? len : 0, c->data_len, (g_get_monotonic_time () - t0) / 1000.0);
     }
   s->open = TRUE;
   return TRUE;
@@ -420,6 +441,7 @@ vfs495_session_wait_swipe (Vfs495Session *s, GCancellable *cancellable, GByteArr
   g_autoptr(GError) local = NULL;
   gint64 end;
   guint stream_len, r_short_reads, max_gap_ms;
+  gint64 first_ms;
   g_autofree char *gaps = NULL;
   /* VFS495_QUIET_MS overrides both windows, to measure pauses */
   const char *quiet_env = g_getenv ("VFS495_QUIET_MS");
@@ -469,6 +491,7 @@ vfs495_session_wait_swipe (Vfs495Session *s, GCancellable *cancellable, GByteArr
   stream_len = r->out->len;
   r_short_reads = r->short_reads;
   max_gap_ms = r->max_gap_ms;
+  first_ms = r->first_data ? (r->first_data - r->started) / 1000 : -1;
   gaps = g_strdup (r->gaps->str);
 
   if (!abort_capture (s, ok ? &local : NULL))
@@ -485,7 +508,8 @@ vfs495_session_wait_swipe (Vfs495Session *s, GCancellable *cancellable, GByteArr
   g_debug ("stream %u bytes in %u short reads, %u more after the abort", stream_len, r_short_reads,
            out->len - stream_len);
   if (stream_len > 0)
-    g_print ("   pauses: longest %u ms; over 25 ms at frame:ms%s\n", max_gap_ms, *gaps ? gaps : " none");
+    g_print ("   first data %" G_GINT64_FORMAT " ms after arming; pauses: longest %u ms; over 25 ms at frame:ms%s\n",
+             first_ms, max_gap_ms, *gaps ? gaps : " none");
   g_byte_array_set_size (out, stream_len);
   if (out->len == 0 && g_cancellable_is_cancelled (cancellable))
     {

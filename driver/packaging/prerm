@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+case "$1" in
+remove | deconfigure)
+	# give fingerprint login back to Ubuntu's own profile
+	pam-auth-update --package --remove vfs495-driver || true
+	pam-auth-update --package --enable fprintd || true
+	;;
+esac
+exit 0

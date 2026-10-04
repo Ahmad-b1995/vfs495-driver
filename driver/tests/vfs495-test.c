@@ -208,6 +208,31 @@ test_crypto (const char *path)
 
 /* ---- command file built from HP's package ------------------------------------------------- */
 
+/* does built command b, as the driver sends it to the sensor with this flash, equal recorded
+ * command r (per-session values aside)? */
+static gboolean
+command_as_recorded (const Vfs495Command *b, const Vfs495Command *r, const guint8 *flash, gsize flash_len)
+{
+  gsize blen, rlen, slen = 0;
+  const guint8 *bp = g_bytes_get_data (b->payload, &blen);
+  const guint8 *rp = g_bytes_get_data (r->payload, &rlen);
+  g_autofree guint8 *sent = NULL;
+  g_autofree guint8 *want = g_memdup2 (rp, rlen);
+
+  if (b->flags & VFS495_FLAG_FLASH_SIGNATURE)
+    sent = vfs495_patch_for_sensor (bp, blen, flash, flash_len, &slen, NULL);
+  else
+    sent = g_memdup2 (bp, slen = blen);
+  if (!sent || slen != rlen || b->phase != r->phase || b->data_len != r->data_len || b->key_offset != r->key_offset)
+    return FALSE;
+  /* per-session values: the ClientHello random, the arming key field */
+  if (r->phase == VFS495_PHASE_HELLO && rlen >= 46)
+    memset (want + 14, 0, 32), memset (sent + 14, 0, 32);
+  if (r->key_offset != VFS495_NO_KEY && (gsize) r->key_offset + VFS495_KEY_FIELD_LEN <= rlen)
+    memset (want + r->key_offset, 0, VFS495_KEY_FIELD_LEN), memset (sent + r->key_offset, 0, VFS495_KEY_FIELD_LEN);
+  return memcmp (sent, want, rlen) == 0;
+}
+
 static void
 test_recipe (const char *captures, const Vfs495Commands *recorded)
 {
@@ -217,7 +242,7 @@ test_recipe (const char *captures, const Vfs495Commands *recorded)
   g_autoptr(GError) error = NULL;
   Vfs495Commands *built;
   gsize flash_len;
-  guint same = 0, patches = 0, fallback_ok = 0;
+  guint same = 0, patches = 0, fallback_ok = 0, j = 0;
 
   if (!recorded || !g_file_get_contents (flash_path, &flash, &flash_len, NULL))
     {
@@ -229,45 +254,37 @@ test_recipe (const char *captures, const Vfs495Commands *recorded)
       skip ("recipe", error->message);
       return;
     }
-  for (guint i = 0; i < MIN (built->commands->len, recorded->commands->len); i++)
+  /* the built commands must be the recorded ones in order; the recipe may leave some of
+   * HP's commands out ("omit") */
+  for (guint i = 0; i < built->commands->len; i++)
     {
       const Vfs495Command *b = g_ptr_array_index (built->commands, i);
-      const Vfs495Command *r = g_ptr_array_index (recorded->commands, i);
-      gsize blen, rlen, slen = 0;
-      const guint8 *bp = g_bytes_get_data (b->payload, &blen);
-      const guint8 *rp = g_bytes_get_data (r->payload, &rlen);
-      g_autofree guint8 *sent = NULL;
-      g_autofree guint8 *want = g_memdup2 (rp, rlen);
 
       if (b->flags & VFS495_FLAG_FLASH_SIGNATURE)
         {
-          g_autofree guint8 *rsa = NULL;
-          gsize rsa_len = 0;
+          gsize blen, rsa_len = 0;
+          const guint8 *bp = g_bytes_get_data (b->payload, &blen);
+          /* without a cached signature: HP's RSA-signed patch, unchanged */
+          g_autofree guint8 *rsa = vfs495_patch_for_sensor (bp, blen, NULL, 0, &rsa_len, NULL);
 
           patches++;
-          sent = vfs495_patch_for_sensor (bp, blen, (guint8 *) flash, flash_len, &slen, NULL);
-          /* without a cached signature: HP's RSA-signed patch, unchanged */
-          rsa = vfs495_patch_for_sensor (bp, blen, NULL, 0, &rsa_len, NULL);
           fallback_ok += rsa && rsa_len == blen - 8 && memcmp (rsa, bp + 8, rsa_len) == 0;
         }
-      else
+      while (j < recorded->commands->len &&
+             !command_as_recorded (b, g_ptr_array_index (recorded->commands, j), (guint8 *) flash, flash_len))
+        j++;
+      if (j < recorded->commands->len)
         {
-          sent = g_memdup2 (bp, blen);
-          slen = blen;
+          same++;
+          j++;
         }
-      /* per-session values: the ClientHello random, the arming key field */
-      if (r->phase == VFS495_PHASE_HELLO && rlen >= 46 && slen == rlen)
-        memset (want + 14, 0, 32), memset (sent + 14, 0, 32);
-      if (r->key_offset != VFS495_NO_KEY && (gsize) r->key_offset + VFS495_KEY_FIELD_LEN <= rlen && slen == rlen)
-        memset (want + r->key_offset, 0, VFS495_KEY_FIELD_LEN), memset (sent + r->key_offset, 0, VFS495_KEY_FIELD_LEN);
-      same += sent && b->phase == r->phase && b->data_len == r->data_len && b->key_offset == r->key_offset &&
-              slen == rlen && memcmp (sent, want, rlen) == 0;
     }
   {
-    g_autofree char *detail = g_strdup_printf ("%u/%u commands as recorded, %u/%u signed patches fall back to RSA",
-                                               same, recorded->commands->len, fallback_ok, patches);
-    result (built->commands->len == recorded->commands->len && same == recorded->commands->len && patches > 0 &&
-            fallback_ok == patches, "recipe", detail);
+    g_autofree char *detail = g_strdup_printf ("%u/%u commands as recorded, in order (%u of HP's left out), "
+                                               "%u/%u signed patches fall back to RSA",
+                                               same, built->commands->len, recorded->commands->len - same,
+                                               fallback_ok, patches);
+    result (same == built->commands->len && same > 0 && patches > 0 && fallback_ok == patches, "recipe", detail);
   }
   vfs495_commands_free (built);
 }

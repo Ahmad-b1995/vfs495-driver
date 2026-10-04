@@ -5,9 +5,11 @@ if [ "$1" = configure ]; then
 	rm -f /etc/systemd/system/fprintd.service.d/vfs495-driver.conf
 	rmdir --ignore-fail-on-non-empty /etc/systemd/system/fprintd.service.d 2>/dev/null || true
 	rm -rf /var/lib/vfs495-driver
-	# first install: turn on Ubuntu's fingerprint login (later upgrades keep the admin's choice)
-	if [ -z "$2" ]; then
-		pam-auth-update --package --enable fprintd || true
+	# Fingerprint login through this package's PAM profile: Ubuntu's fprintd profile allows one
+	# try, and the lock screen uses it (its password conversation claims the reader first); a
+	# swipe reader deserves a second. Done once: later changes by the admin are kept.
+	if ! grep -qx vfs495-driver /var/lib/pam/seen 2>/dev/null; then
+		pam-auth-update --package --remove fprintd --enable vfs495-driver || true
 	fi
 	systemctl daemon-reload 2>/dev/null || true
 	systemctl try-restart fprintd 2>/dev/null || true

@@ -37,6 +37,7 @@ struct _FpiDeviceVfs495
   gboolean        session_open;
   gboolean        captured;        /* a capture ran since setup: send the re-arm block first */
   gboolean        open_retried;
+  gboolean        force_reset;     /* the sensor's state is unknown: reset the port on setup */
   GByteArray     *flash;           /* pre-session flash block holding the RSA key */
   guint           cmd_index;       /* position while walking the command list */
 
@@ -280,9 +281,34 @@ next_command (FpiDeviceVfs495 *self, Vfs495Phase phase)
 }
 
 /* ---- session setup ---------------------------------------------------------------------------
- * Port reset, pre-session commands (patches and the flash reads that carry the RSA key),
- * handshake, configuration. The reset matters: the sensor keeps its patches from an earlier
- * session until it is suspended, and a fresh setup fails on a patched sensor. */
+ * Port reset if needed, pre-session commands (patches and the flash reads that carry the RSA
+ * key), handshake, configuration. The sensor keeps its patches from an earlier session until
+ * it is suspended, and a fresh setup fails on a patched sensor; a port reset (240 ms) clears
+ * them. Usually the sensor has idled and been suspended, so its status shows it in power-on
+ * state and the reset is skipped. After an error the state is unknown and the port is always
+ * reset: a status request that reached a streaming sensor would reset it. */
+
+/* the 01 status reply: bytes 17 and 37 are 00 in power-on state, byte 37 is 15 once patched */
+static gboolean
+sensor_is_fresh (FpiDeviceVfs495 *self)
+{
+  g_autoptr(FpiUsbTransfer) out = fpi_usb_transfer_new (FP_DEVICE (self));
+  g_autoptr(FpiUsbTransfer) in = fpi_usb_transfer_new (FP_DEVICE (self));
+  g_autoptr(GError) error = NULL;
+
+  fpi_usb_transfer_fill_bulk (out, VFS495_EP_OUT, 1);
+  out->buffer[0] = 0x01;
+  fpi_usb_transfer_fill_bulk (in, VFS495_EP_CMD_IN, 64);
+  if (!fpi_usb_transfer_submit_sync (out, 500, &error) || !fpi_usb_transfer_submit_sync (in, 500, &error))
+    {
+      fp_dbg ("status request failed (%s): resetting the port", error->message);
+      return FALSE;
+    }
+  if (in->actual_length < 38 || in->buffer[0] || in->buffer[1])
+    return FALSE;
+  fp_dbg ("sensor state %02x/%02x", in->buffer[17], in->buffer[37]);
+  return in->buffer[17] == 0 && in->buffer[37] == 0;
+}
 
 enum {
   SETUP_RESET,
@@ -314,16 +340,28 @@ setup_handler (FpiSsm *ssm, FpDevice *dev)
       self->cmd_index = 0;
       vfs495_crypto_clear (&self->crypto);
       g_clear_pointer (&self->flash, g_byte_array_unref);
-      if (self->claimed)
-        g_usb_device_release_interface (usb, 0, 0, NULL);
-      self->claimed = FALSE;
-      if (!g_usb_device_reset (usb, &error) ||
-          !g_usb_device_claim_interface (usb, 0, G_USB_DEVICE_CLAIM_INTERFACE_NONE, &error))
+      if (!self->claimed)
         {
-          fpi_ssm_mark_failed (ssm, error);
-          return;
+          if (!g_usb_device_claim_interface (usb, 0, G_USB_DEVICE_CLAIM_INTERFACE_NONE, &error))
+            {
+              fpi_ssm_mark_failed (ssm, error);
+              return;
+            }
+          self->claimed = TRUE;
         }
-      self->claimed = TRUE;
+      if (self->force_reset || !sensor_is_fresh (self))
+        {
+          g_usb_device_release_interface (usb, 0, 0, NULL);
+          self->claimed = FALSE;
+          if (!g_usb_device_reset (usb, &error) ||
+              !g_usb_device_claim_interface (usb, 0, G_USB_DEVICE_CLAIM_INTERFACE_NONE, &error))
+            {
+              fpi_ssm_mark_failed (ssm, error);
+              return;
+            }
+          self->claimed = TRUE;
+        }
+      self->force_reset = FALSE;
       fpi_ssm_next_state (ssm);
       break;
 
@@ -828,6 +866,7 @@ capture_done (FpiSsm *ssm, FpDevice *dev, GError *error)
     {
       /* the sensor's state is unknown: the next capture starts with a port reset and setup */
       self->session_open = FALSE;
+      self->force_reset = TRUE;
       if (!self->deactivating && !self->suspending)
         {
           if (!reported && !self->recovering)
@@ -973,6 +1012,7 @@ open_done (FpiSsm *ssm, FpDevice *dev, GError *error)
       fp_warn ("sensor setup failed (%s); trying once more", error->message);
       g_error_free (error);
       self->open_retried = TRUE;
+      self->force_reset = TRUE;
       fpi_ssm_start (setup_ssm (self), open_done);
       return;
     }

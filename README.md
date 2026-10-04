@@ -168,6 +168,19 @@ Verified on an HP ZBook 17 G3, Ubuntu 25.10, sensor firmware 04.60.00.0104 Falco
     sensor accepts any value. The column descramble table is not stored in HP's program; it is
     four reversed runs (sensor columns 0-199 to image columns 199-0, 200-241 to 262-221, 242 to
     263, 243-263 to 220-200).
+26. **Sensor setup takes 0.45 s instead of 1.29 s.** Timed per command: the port reset 240 ms,
+    the handshake 271 ms (the sensor's RSA work), and HP's in-session read of 512 KB of flash
+    540 ms. The driver skips the flash read (its data is unused; swipes without it were
+    unchanged) and HP's second patch reload and calibration capture before arming (60 ms), as
+    marked "omit" in the recipe, and resets the port only when the `01` status shows patches
+    left from an earlier session, or after an error. Arming during a swipe does not capture
+    it: with a finger swiping back and forth, the first data came 1.3 s after arming, so the
+    sensor waits for a finger to arrive.
+27. **The lock screen's fingerprint attempt runs under `common-auth`.** GNOME starts both
+    `gdm-password` (which includes `common-auth`, where Ubuntu's fprintd profile allows one
+    try in 10 s) and `gdm-fingerprint` (3 tries); the password conversation claims the reader
+    first and the other is refused. So one no-match ended the attempt. The package's own PAM
+    profile allows two tries.
 
 ## Image quality (Phase 2, in progress)
 

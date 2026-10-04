@@ -148,9 +148,14 @@ cmd_capture (int argc, char **argv)
   usb = g_usb_context_find_by_vid_pid (ctx, 0x138a, 0x003f, &error);
   /* the sensor keeps patches from an earlier session unless it was suspended; a port reset
    * returns it to its power-on state (the driver does the same on open) */
-  if (!usb || !g_usb_device_open (usb, &error) || !g_usb_device_reset (usb, &error) ||
+  t0 = g_get_monotonic_time ();
+  if (!usb || !g_usb_device_open (usb, &error) ||
+      (!g_getenv ("VFS495_NO_RESET") && !g_usb_device_reset (usb, &error)) ||
       !g_usb_device_claim_interface (usb, 0, G_USB_DEVICE_CLAIM_INTERFACE_NONE, &error))
     goto out;
+  if (g_getenv ("VFS495_TIMING"))
+    g_print ("   open%s: %.1f ms\n", g_getenv ("VFS495_NO_RESET") ? "" : " and port reset",
+             (g_get_monotonic_time () - t0) / 1000.0);
 
   s = vfs495_session_new (usb, cmds);
   t0 = g_get_monotonic_time ();

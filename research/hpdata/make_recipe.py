@@ -26,6 +26,9 @@ MIN_ZERO = 8     # zero runs at least this long become "zero" parts
 MIN_HP = 32      # HP byte ranges at least this long, with MIN_CONTENT non-zero bytes, become
 MIN_CONTENT = 16  # "hp" parts; shorter matches are coincidences in protocol parameters
 KEY_FIELD_RANDOM = 96
+OMIT = {9: "HP's 512 KB flash read: 540 ms, its data is not used; swipes are unchanged without it",
+        **{i: "HP's second patch reload and calibration capture before arming: 60 ms, not needed for arming"
+           for i in range(15, 20)}}
 
 
 def load(path):
@@ -125,6 +128,9 @@ def main():
             p[c["key_offset"]:c["key_offset"] + KEY_FIELD_RANDOM] = bytes(KEY_FIELD_RANDOM)
         entry["parts"] = (p[:1] == b"\x06" and patch_parts(p, table)) or segment(p, hp)
         out.append(entry)
+    # measured on the sensor (research/session/speed-test.sh): HP's steps the driver skips
+    for i, reason in OMIT.items():
+        out[i]["omit"] = reason
     recipe = {
         "format": 1,
         "comment": "Rebuilds the VFS495 command file from HP's SoftPaq sp84530 (driver/recipe/build-commands.py). "

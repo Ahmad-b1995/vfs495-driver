@@ -1,0 +1,7 @@
+Name: Fingerprint authentication (VFS495 swipe reader, 2 tries)
+Default: yes
+Priority: 261
+Conflicts: fprint fprintd
+Auth-Type: Primary
+Auth:
+	[success=end default=ignore]	pam_fprintd.so max-tries=2 timeout=10

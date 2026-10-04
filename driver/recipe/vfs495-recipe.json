@@ -131,7 +131,8 @@
     {
      "hex": "0b08000000"
     }
-   ]
+   ],
+   "omit": "HP's 512 KB flash read: 540 ms, its data is not used; swipes are unchanged without it"
   },
   {
    "phase": "setup",
@@ -228,7 +229,8 @@
     {
      "hex": "1a"
     }
-   ]
+   ],
+   "omit": "HP's second patch reload and calibration capture before arming: 60 ms, not needed for arming"
   },
   {
    "phase": "setup",
@@ -245,7 +247,8 @@
      "sha256": "7585ef609530a3fc",
      "signature": "flash"
     }
-   ]
+   ],
+   "omit": "HP's second patch reload and calibration capture before arming: 60 ms, not needed for arming"
   },
   {
    "phase": "setup",
@@ -253,7 +256,8 @@
     {
      "hex": "1a"
     }
-   ]
+   ],
+   "omit": "HP's second patch reload and calibration capture before arming: 60 ms, not needed for arming"
   },
   {
    "phase": "setup",
@@ -270,7 +274,8 @@
      "sha256": "1315f419e4f44b74",
      "signature": "flash"
     }
-   ]
+   ],
+   "omit": "HP's second patch reload and calibration capture before arming: 60 ms, not needed for arming"
   },
   {
    "phase": "setup",
@@ -295,7 +300,8 @@
     {
      "hex": "0300000401"
     }
-   ]
+   ],
+   "omit": "HP's second patch reload and calibration capture before arming: 60 ms, not needed for arming"
   },
   {
    "phase": "rearm",

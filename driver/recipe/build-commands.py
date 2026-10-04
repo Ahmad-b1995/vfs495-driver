@@ -76,6 +76,8 @@ def build(recipe, program, signatures="flash"):
     table = patch_table(program)
     entries = []
     for c in recipe["commands"]:
+        if c.get("omit"):   # HP sends it, the driver does not need it (reason in the recipe)
+            continue
         phase = PHASES[c["phase"]]
         if "descramble" in c:
             payload, flags = descramble_table(c["descramble"]), 0
