@@ -65,6 +65,7 @@ chmod 0644 "$STAGE/usr/lib/systemd/system/fprintd.service.d/vfs495-driver.conf"
 install -D -m 0755 "$ROOT/driver/tools/scores.sh" "$STAGE/usr/bin/vfs495-scores"
 install -D -m 0755 "$ROOT/driver/tools/check.py" "$STAGE/usr/bin/vfs495-check"
 install -D -m 0644 "$PKG/pam-config" "$STAGE/usr/share/pam-configs/vfs495-driver"
+install -D -m 0755 "$PKG/system-sleep" "$STAGE/usr/lib/systemd/system-sleep/vfs495-driver"
 # configuration files survive removal of the package: the hook warns if an upgrade removed it
 install -D -m 0755 "$PKG/apt-hook.sh" "$STAGE/etc/vfs495-driver/apt-hook.sh"
 install -D -m 0644 "$PKG/apt-hook.conf" "$STAGE/etc/apt/apt.conf.d/80vfs495-driver"

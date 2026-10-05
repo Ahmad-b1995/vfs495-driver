@@ -1,5 +1,5 @@
 project('vfs495-driver', 'c',
-  version: '0.5.1',
+  version: '0.5.2',
   default_options: ['c_std=gnu11', 'warning_level=2', 'buildtype=release'])
 
 cc = meson.get_compiler('c')

@@ -185,6 +185,13 @@ Verified on an HP ZBook 17 G3, Ubuntu 25.10, sensor firmware 04.60.00.0104 Falco
     try in 10 s) and `gdm-fingerprint` (3 tries); the password conversation claims the reader
     first and the other is refused. So one no-match ended the attempt. The package's own PAM
     profile allows two tries.
+28. **A permanently running fprintd can keep a stale reader after resume.** On this laptop the
+    USB controller is often reinitialised on resume ("xHC error in resume, Reinit") and the
+    reader comes back at a new address. Once, libfprint added the new reader but kept the old
+    entry, which GNOME used first: no fingerprint prompt (`libusb couldn't open USB device
+    /dev/bus/usb/001/052`). fprintd was idle at the time, so the stale entry was not held open.
+    Since fprintd runs with `--no-timeout`, the package restarts it after every resume (a
+    systemd sleep hook, non-blocking), so it never carries devices across a suspend.
 
 ## Image quality (Phase 2, in progress)
 
