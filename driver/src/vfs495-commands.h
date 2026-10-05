@@ -43,4 +43,9 @@ typedef struct
 
 Vfs495Commands *vfs495_commands_load (const char *path,
                                       GError    **error);
+/* the same from memory; name is used in error messages */
+Vfs495Commands *vfs495_commands_parse (const guint8 *data,
+                                       gsize         len,
+                                       const char   *name,
+                                       GError      **error);
 void            vfs495_commands_free (Vfs495Commands *cmds);

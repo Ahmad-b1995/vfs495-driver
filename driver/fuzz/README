@@ -1,0 +1,32 @@
+Fuzz targets for the VFS495 driver
+==================================
+
+The driver runs inside fprintd, as root, and parses bytes it cannot trust: whatever arrives
+from the USB device (which could be something pretending to be the reader) and the command
+file. These targets feed those parsers arbitrary input:
+
+  fuzz-commands   the command file parser                       (vfs495-commands.c)
+  fuzz-records    record layer, handshake reply, ServerHello,
+                  signed patches against a flash block          (vfs495-protocol.c)
+  fuzz-frames     the swipe frame parser                        (vfs495-image.c)
+  fuzz-assemble   the stitcher and swipe verdict                (vfs495-assemble.c)
+
+Seeds come from private captures (make-corpus.py writes captures/fuzz/TARGET). Every input a
+fuzzer finds that crashed something belongs in that corpus after the fix, so the regression
+run keeps testing it.
+
+Two builds:
+
+  Replay (any compiler): each target is linked with run-corpus.c and `meson test` replays the
+  corpus. In the sanitizer build this is the regression check:
+    driver/tools/hardening-check.sh
+
+  Fuzzing (clang, libFuzzer):
+    CC=clang meson setup build/fuzz driver -Dfuzz=true -Db_sanitize=address,undefined -Db_lundef=false
+    CC=clang meson setup build/fuzz-asan driver -Dfuzz=true -Db_sanitize=address -Db_lundef=false
+    ninja -C build/fuzz && ninja -C build/fuzz-asan
+    driver/fuzz/run-fuzzers.sh [SECONDS]     (default 600 per target, all four in parallel)
+
+  fuzz-assemble runs from the ASan-only build: under libFuzzer with UBSan the stitcher is about
+  10x slower (2.8 s against 0.26 s for 150 lines; both sanitizers without libFuzzer: 0.1 s).
+  Its corpus is replayed under ASan and UBSan by the regression check.

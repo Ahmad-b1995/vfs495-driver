@@ -28,3 +28,10 @@ guint8 *vfs495_decode_stream (const guint8     *stream,
                               int              *n_lines,
                               Vfs495DecodeInfo *info,
                               GError          **error);
+
+/* the frames of an already decrypted stream, as vfs495_decode_stream returns them */
+guint8 *vfs495_frames_to_lines (const guint8     *plain,
+                                gsize             len,
+                                const guint16    *descramble,
+                                int              *n_lines,
+                                Vfs495DecodeInfo *info);

@@ -1,1 +1,2 @@
 option('native', type: 'boolean', value: false, description: 'tune for the build machine (-march=native)')
+option('fuzz', type: 'boolean', value: false, description: 'build libFuzzer fuzzers (needs clang; see fuzz/README)')

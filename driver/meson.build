@@ -1,5 +1,5 @@
 project('vfs495-driver', 'c',
-  version: '0.5.0',
+  version: '0.5.1',
   default_options: ['c_std=gnu11', 'warning_level=2', 'buildtype=release'])
 
 cc = meson.get_compiler('c')
@@ -11,6 +11,15 @@ gusb = dependency('gusb')
 libcrypto = dependency('libcrypto')
 libfprint_tod = dependency('libfprint-2-tod-1')
 libfprint = dependency('libfprint-2')
+
+# -Dfuzz=true builds libFuzzer fuzzers instead of corpus replayers (clang only): the code
+# under test is instrumented for coverage.
+if get_option('fuzz')
+  if cc.get_id() != 'clang'
+    error('-Dfuzz=true needs clang: CC=clang meson setup ...')
+  endif
+  add_project_arguments('-fsanitize=fuzzer-no-link', language: 'c')
+endif
 
 # -Dnative=true tunes for the build machine; packages are built for generic x86-64.
 if get_option('native')
@@ -36,12 +45,13 @@ executable('vfs495-tool', 'src/vfs495-tool.c', 'src/vfs495-proto.c',
 # libfprint_tod.get_variable('tod_driversdir') (or $FP_TOD_DRIVERS_DIR).
 # Linked against libfprint-2 too (fp_image_new and the image device type are public API), so
 # the module resolves every symbol through its own dependencies, whatever the host process;
-# -z defs turns a symbol the libraries do not export into a build error.
+# -z defs turns a symbol the libraries do not export into a build error (not in sanitizer
+# builds, whose runtime symbols are resolved at load time).
 shared_module('fprint-tod-vfs495', 'src/vfs495.c',
   link_with: [assemble, protocol],
   dependencies: [libfprint_tod, libfprint, glib, gio, gmodule, gusb, libcrypto, m],
   c_args: ['-Wno-unused-parameter'],
-  link_args: ['-Wl,-z,defs'],
+  link_args: get_option('b_sanitize') == 'none' ? ['-Wl,-z,defs'] : [],
   gnu_symbol_visibility: 'hidden',
   install: true,
   install_dir: libfprint_tod.get_variable(pkgconfig: 'tod_driversdir'))
@@ -57,3 +67,24 @@ test('regression', tests,
   args: [meson.project_source_root() / 'tests' / 'golden.txt',
          meson.project_source_root() / '..' / 'captures'],
   timeout: 600)
+
+# Fuzz targets for the code that parses untrusted bytes (fuzz/README). Normally each is a
+# replayer of saved inputs, run by meson test against the private corpus in
+# captures/fuzz/TARGET (skipped without it); with -Dfuzz=true each is a libFuzzer fuzzer.
+fuzz_corpus = meson.project_source_root() / '..' / 'captures' / 'fuzz'
+foreach t : ['commands', 'records', 'frames', 'assemble']
+  if get_option('fuzz')
+    executable('fuzz-' + t, 'fuzz/fuzz-' + t + '.c',
+      include_directories: 'src',
+      link_with: [assemble, protocol],
+      dependencies: [glib, gio, libcrypto, m],
+      link_args: ['-fsanitize=fuzzer'])
+  else
+    replay = executable('fuzz-' + t + '-replay', 'fuzz/fuzz-' + t + '.c', 'fuzz/run-corpus.c',
+      include_directories: 'src',
+      link_with: [assemble, protocol],
+      dependencies: [glib, gio, libcrypto, m])
+    test('fuzz-corpus-' + t, replay, args: [fuzz_corpus / t], timeout: 600)
+  endif
+endforeach
+

@@ -282,6 +282,25 @@ command data equals the data recorded from HP's tool for all 26 commands (`meson
 `research/hpdata/make_recipe.py` derives the recipe from a recorded command file, and
 `research/hpdata/map_commands.py` shows which bytes of it occur in HP's files.
 
+## Hardening
+
+The driver runs inside fprintd, as root, and parses bytes from the USB device (which could be
+something pretending to be the reader) and the command file. The parsers are fuzzed and the
+tests run under AddressSanitizer and UndefinedBehaviorSanitizer:
+
+- Sanitizer runs found two faults, both in the command file loader: its descramble table was
+  used unchecked as column indices by the swipe decoder (a malformed file could write past a
+  line buffer), and it read numbers through misaligned pointers (undefined behaviour). The
+  loader now reads byte by byte and accepts only a permutation of the 264 columns and known
+  phases.
+- First fuzzing run, 10 minutes per target: 45 million command files, 9.9 million record-layer
+  inputs, 5.5 million frame streams and 3,565 stitcher inputs (up to 400 lines) without a
+  fault. The inputs that added coverage joined the corpus (329 inputs), which
+  `hardening-check.sh` replays.
+- Under libFuzzer, UndefinedBehaviorSanitizer slows the stitcher about tenfold (2.8 s against
+  0.26 s with AddressSanitizer alone, for 150 lines), so the stitcher is fuzzed with
+  AddressSanitizer and its corpus replayed under both.
+
 ## Configuration programs
 
 The 17 distinct configuration programs (`02`) HP sends before and during finger capture are TLV
@@ -402,6 +421,11 @@ may matter across temperature or sensor units.
   `driver/tests/golden.txt` holds the expected verdicts, sizes and hashes; after an intended
   change, `build/driver/vfs495-test --update driver/tests/golden.txt captures` updates it.
   `driver/tests/make-vectors.py` extracts the session vectors from recordings.
+- `driver/fuzz/` holds fuzz targets for every parser of untrusted bytes (the command file, the
+  record layer and handshake reply, signed patches against a flash block, swipe frames, the
+  stitcher), built as libFuzzer fuzzers with clang or as replayers of the private corpus in
+  `captures/fuzz/`. `driver/tools/hardening-check.sh` runs the regression tests and the
+  corpus replay with AddressSanitizer and UndefinedBehaviorSanitizer (see "Hardening").
 - `captures/` holds recordings. It is git-ignored: recordings contain the sensor serial,
   per-device keys and raw sensor data.
 
