@@ -758,7 +758,11 @@ vfs495_assemble (const guint8 *lines8, int n, Vfs495AssembleInfo *info, GError *
   return u8;
 }
 
-#define MIN_ROWS           80     /* a usable swipe stitches to ~150-400 rows */
+/* A usable swipe stitches to ~200-500 rows. In daily use (September-October 2026) the prints of
+ * 155, 160, 179 and 183 rows failed to match and one of 173 matched, against 1 in 6 failures
+ * above 185 rows; asking for another swipe costs no attempt. 185 keeps the recorded test swipes
+ * of 195-198 rows. */
+#define MIN_ROWS           185
 #define RESTING_STILL      0.9
 #define RESTING_TRUSTED    10
 #define MIN_COVERAGE       0.6

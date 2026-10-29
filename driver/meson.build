@@ -1,8 +1,9 @@
 project('vfs495-driver', 'c',
-  version: '0.5.2',
+  version: '0.6.0',
   default_options: ['c_std=gnu11', 'warning_level=2', 'buildtype=release'])
 
 cc = meson.get_compiler('c')
+add_project_arguments('-DVFS495_VERSION="@0@"'.format(meson.project_version()), language: 'c')
 glib = dependency('glib-2.0')
 gio = dependency('gio-2.0')
 gmodule = dependency('gmodule-2.0')
@@ -47,7 +48,7 @@ executable('vfs495-tool', 'src/vfs495-tool.c', 'src/vfs495-proto.c',
 # the module resolves every symbol through its own dependencies, whatever the host process;
 # -z defs turns a symbol the libraries do not export into a build error (not in sanitizer
 # builds, whose runtime symbols are resolved at load time).
-shared_module('fprint-tod-vfs495', 'src/vfs495.c',
+module = shared_module('fprint-tod-vfs495', 'src/vfs495.c', 'src/vfs495-diag.c',
   link_with: [assemble, protocol],
   dependencies: [libfprint_tod, libfprint, glib, gio, gmodule, gusb, libcrypto, m],
   c_args: ['-Wno-unused-parameter'],
@@ -55,6 +56,15 @@ shared_module('fprint-tod-vfs495', 'src/vfs495.c',
   gnu_symbol_visibility: 'hidden',
   install: true,
   install_dir: libfprint_tod.get_variable(pkgconfig: 'tod_driversdir'))
+
+# Tests without recorded data: the stitcher on simulated swipes, the stream decoder, the
+# command parser, the session crypto, signed patches and the beta diagnostics. Run anywhere,
+# including CI.
+unit = executable('vfs495-unit', 'tests/vfs495-unit.c', 'tests/vfs495-sim.c', 'src/vfs495-diag.c',
+  include_directories: 'src',
+  link_with: [assemble, protocol],
+  dependencies: [glib, gio, libcrypto, m])
+test('unit', unit, protocol: 'tap', args: ['--tap'], timeout: 300)
 
 # Regression tests. Their data (recordings, scans) is private and lives in the git-ignored
 # captures/ folder; tests without data are skipped. Update expectations after an intended
@@ -67,6 +77,16 @@ test('regression', tests,
   args: [meson.project_source_root() / 'tests' / 'golden.txt',
          meson.project_source_root() / '..' / 'captures'],
   timeout: 600)
+
+# The whole driver inside libfprint, replayed from USB recordings made with
+# tests/umockdev/record.sh (private: they hold a fingerprint scan); skipped without them. Not in
+# sanitizer builds, whose module cannot load into an uninstrumented Python.
+if get_option('b_sanitize') == 'none'
+  test('umockdev', find_program('tests/umockdev/replay.sh'),
+    args: [meson.current_build_dir(), meson.project_source_root() / '..' / 'captures' / 'umockdev'],
+    depends: module,
+    timeout: 120)
+endif
 
 # Fuzz targets for the code that parses untrusted bytes (fuzz/README). Normally each is a
 # replayer of saved inputs, run by meson test against the private corpus in

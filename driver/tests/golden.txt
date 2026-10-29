@@ -10,7 +10,7 @@ swipe ctool/rindex.1.lines.raw ok 312 06c22595d60e1489
 swipe ctool/rindex.2.lines.raw ok 351 69d88af6e62fb96d
 swipe ctool/rindex.3.lines.raw ok 197 deee9fe5ef8c3473
 swipe ctool/rindex.4.lines.raw ok 231 261799913a28b186
-swipe ctool/rindex.5.lines.raw ok 147 63be558c86165d56
+swipe ctool/rindex.5.lines.raw too-short 147 63be558c86165d56
 swipe ctool/rindex.6.lines.raw ok 223 e2b2471cbb619935
 swipe diag/fast.1.lines.raw too-fast 165 b3558531563b3f2a
 swipe diag/fast.2.lines.raw too-short 0 -

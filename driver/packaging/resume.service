@@ -1,0 +1,18 @@
+# vfs495-driver: restart fprintd after every resume.
+#
+# fprintd runs permanently (--no-timeout, see the fprintd drop-in). On this laptop the USB
+# controller is often reinitialised on resume and the reader comes back at a new address;
+# libfprint then adds the new reader without always dropping the old one, and GNOME, using the
+# first, finds no reader. A fresh fprintd knows only the current one. Started after the sleep
+# target is reached, so logind has finished the sleep operation and fprintd can take its sleep
+# inhibitor again (restarting from a system-sleep hook was too early for that).
+[Unit]
+Description=Restart fprintd after resume (vfs495-driver)
+After=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl --no-block try-restart fprintd.service
+
+[Install]
+WantedBy=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target

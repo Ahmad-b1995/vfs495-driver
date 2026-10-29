@@ -6,4 +6,8 @@ remove | purge)
 	systemctl try-restart fprintd 2>/dev/null || true
 	;;
 esac
+# the beta diagnostics (vfs495-diag) are fingerprint scans
+if [ "$1" = purge ]; then
+	rm -rf /var/lib/vfs495-driver
+fi
 exit 0

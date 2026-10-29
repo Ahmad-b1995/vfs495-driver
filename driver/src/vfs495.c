@@ -11,11 +11,11 @@
 
 #include "drivers_api.h"
 
-#include <openssl/rand.h>
 #include <string.h>
 
 #include "vfs495-assemble.h"
 #include "vfs495-commands.h"
+#include "vfs495-diag.h"
 #include "vfs495-image.h"
 #include "vfs495-protocol.h"
 
@@ -24,6 +24,20 @@
 #define REARM_AFTER_MS    50000   /* HP arms for at most 60 s; re-arm before that */
 #define COLLECT_TICK_MS   10
 #define WAIT_TICK_MS      20      /* how often an armed sensor is checked for data */
+
+/* a debug message that also goes to the beta diagnostics (vfs495-diag.h), when they are on */
+#define note(self, ...) \
+  G_STMT_START { \
+    g_autofree char *note_text_ = g_strdup_printf (__VA_ARGS__); \
+    fp_dbg ("%s", note_text_); \
+    vfs495_diag_event ((self)->diag, "%s", note_text_); \
+  } G_STMT_END
+#define note_warn(self, ...) \
+  G_STMT_START { \
+    g_autofree char *note_text_ = g_strdup_printf (__VA_ARGS__); \
+    fp_warn ("%s", note_text_); \
+    vfs495_diag_event ((self)->diag, "warning: %s", note_text_); \
+  } G_STMT_END
 
 G_DECLARE_FINAL_TYPE (FpiDeviceVfs495, fpi_device_vfs495, FPI, DEVICE_VFS495, FpImageDevice)
 
@@ -49,6 +63,13 @@ struct _FpiDeviceVfs495
   GByteArray     *reply;
   GByteArray     *data;
 
+  /* beta diagnostics (NULL when off) and the timings they record */
+  Vfs495Diag     *diag;
+  gint64          setup_start;
+  double          setup_ms;        /* setup before the coming arming, 0 if none */
+  gboolean        port_reset;      /* that setup reset the port */
+  gint64          first_data;
+
   /* capture loop */
   FpiSsm         *capture_ssm;
   gboolean        loop_running;
@@ -70,6 +91,7 @@ struct _FpiDeviceVfs495
   gboolean        reader_waiting;  /* the capture machine waits for pending reads to end */
   GByteArray     *stream;
   guint           stream_len;
+  guint           after_abort;
   gint64          last_data;
   GError         *read_error;
 };
@@ -335,6 +357,8 @@ setup_handler (FpiSsm *ssm, FpDevice *dev)
   switch (fpi_ssm_get_cur_state (ssm))
     {
     case SETUP_RESET:
+      self->setup_start = g_get_monotonic_time ();
+      self->port_reset = FALSE;
       self->session_open = FALSE;
       self->captured = FALSE;
       self->cmd_index = 0;
@@ -351,6 +375,8 @@ setup_handler (FpiSsm *ssm, FpDevice *dev)
         }
       if (self->force_reset || !sensor_is_fresh (self))
         {
+          note (self, "resetting the port (%s)", self->force_reset ? "after an error" : "sensor not in power-on state");
+          self->port_reset = TRUE;
           g_usb_device_release_interface (usb, 0, 0, NULL);
           self->claimed = FALSE;
           if (!g_usb_device_reset (usb, &error) ||
@@ -380,7 +406,7 @@ setup_handler (FpiSsm *ssm, FpDevice *dev)
       if (self->cmd_byte == 0x01)
         {
           g_autofree char *hex = vfs495_hex_prefix (self->reply->data, self->reply->len, 40);
-          fp_dbg ("sensor state %s", hex);
+          note (self, "sensor state %s", hex);
         }
       if (self->data->len == VFS495_FLASH_BLOCK_LEN)
         self->flash = g_byte_array_ref (self->data);
@@ -406,6 +432,7 @@ setup_handler (FpiSsm *ssm, FpDevice *dev)
             fpi_ssm_mark_failed (ssm, error);
             return;
           }
+        note (self, "pre-session commands done: %.0f ms", (g_get_monotonic_time () - self->setup_start) / 1000.0);
         run_cmd_full (ssm, self, hello, 0x11, FALSE, 0);
       }
       break;
@@ -429,6 +456,7 @@ setup_handler (FpiSsm *ssm, FpDevice *dev)
           fpi_ssm_mark_failed (ssm, error);
           return;
         }
+      note (self, "session up: %.0f ms", (g_get_monotonic_time () - self->setup_start) / 1000.0);
       self->cmd_index = 0;
       fpi_ssm_next_state (ssm);
       break;
@@ -437,6 +465,8 @@ setup_handler (FpiSsm *ssm, FpDevice *dev)
       i = next_command (self, VFS495_PHASE_SETUP);
       if (i < 0)
         {
+          self->setup_ms = (g_get_monotonic_time () - self->setup_start) / 1000.0;
+          note (self, "sensor set up: %.0f ms%s", self->setup_ms, self->port_reset ? " with a port reset" : "");
           self->session_open = TRUE;
           fpi_ssm_mark_completed (ssm);
           return;
@@ -482,7 +512,7 @@ read_cb (FpiUsbTransfer *transfer, FpDevice *dev, gpointer user_data, GError *er
       if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED) &&
           !g_error_matches (error, G_USB_DEVICE_ERROR, G_USB_DEVICE_ERROR_CANCELLED) && !self->read_error)
         {
-          fp_warn ("data read failed: %s", error->message);
+          note_warn (self, "data read failed: %s", error->message);
           self->read_error = g_steal_pointer (&error);
         }
       g_clear_error (&error);
@@ -501,6 +531,8 @@ read_cb (FpiUsbTransfer *transfer, FpDevice *dev, gpointer user_data, GError *er
 
       if (head->len > 0)
         {
+          if (self->stream->len == 0)
+            self->first_data = g_get_monotonic_time ();
           g_byte_array_append (self->stream, head->buf, head->len);
           self->last_data = g_get_monotonic_time ();
         }
@@ -547,10 +579,12 @@ reader_start (FpiDeviceVfs495 *self)
 
 typedef struct
 {
-  GByteArray *stream;
-  guint8      key[32];
-  guint8      iv[16];
-  guint16     descramble[VFS495_LINE_WIDTH];
+  GByteArray     *stream;
+  guint8          key[32];
+  guint8          iv[16];
+  guint16         descramble[VFS495_LINE_WIDTH];
+  Vfs495Diag     *diag;
+  Vfs495DiagSwipe record;   /* filled in by the capture loop and process_thread */
 } ProcessInput;
 
 typedef struct
@@ -566,6 +600,7 @@ process_input_free (gpointer p)
   ProcessInput *in = p;
 
   g_byte_array_unref (in->stream);
+  vfs495_diag_unref (in->diag);
   explicit_bzero (in, sizeof *in);
   g_free (in);
 }
@@ -585,27 +620,44 @@ process_thread (GTask *task, gpointer source, gpointer task_data, GCancellable *
   ProcessInput *in = task_data;
   ProcessResult *res = g_new0 (ProcessResult, 1);
   g_autoptr(GError) error = NULL;
+  g_autofree guint8 *plain = NULL;
   g_autofree guint8 *lines = NULL;
   Vfs495AssembleInfo info = { 0 };
   Vfs495SwipeVerdict verdict;
   Vfs495DecodeInfo decoded = { 0 };
+  Vfs495DiagSwipe *record = &in->record;
+  gint64 start = g_get_monotonic_time ();
+  gsize plain_len = 0;
   int n = 0;
 
-  lines = vfs495_decode_stream (in->stream->data, in->stream->len, in->key, in->iv, in->descramble, &n, &decoded,
-                                &error);
-  if (!lines)
+  plain = vfs495_decrypt_stream (in->stream->data, in->stream->len, in->key, in->iv, &plain_len, &error);
+  if (!plain)
     {
       fp_warn ("swipe stream: %s", error->message);
+      record->verdict = "undecodable";
+      record->error = error->message;
+      vfs495_diag_swipe (in->diag, record, NULL, 0, NULL, 0);
       res->retry = FP_DEVICE_RETRY_GENERAL;
       g_task_return_pointer (task, res, process_result_free);
       return;
     }
+  lines = vfs495_frames_to_lines (plain, plain_len, in->descramble, &n, &decoded);
+  record->decode_ms = (g_get_monotonic_time () - start) / 1000.0;
+  start = g_get_monotonic_time ();
   res->pixels = vfs495_assemble (lines, n, &info, &error);
+  record->assemble_ms = (g_get_monotonic_time () - start) / 1000.0;
   verdict = vfs495_swipe_verdict (res->pixels, &info);
   fp_dbg ("swipe of %d lines (%u sequence gaps): %s; region %d lines, %d rows, fast %.0f%%, still %.0f%%, "
           "coverage %.0f%%%s%s", n, decoded.gaps,
           vfs495_swipe_verdict_name (verdict), info.region_lines, info.rows, 100 * info.fast,
           100 * info.still_fraction, 100 * info.coverage, error ? "; " : "", error ? error->message : "");
+  record->verdict = vfs495_swipe_verdict_name (verdict);
+  record->error = error ? error->message : NULL;
+  record->lines = n;
+  record->decoded = decoded;
+  record->info = info;
+  vfs495_diag_swipe (in->diag, record, plain, plain_len, res->pixels, res->pixels ? info.rows : 0);
+  explicit_bzero (plain, plain_len);
 
   /* A rejected swipe is reported as a retry, which fprintd answers by waiting for another
    * swipe; a poor image would instead fail to match and use up the attempt. */
@@ -657,6 +709,24 @@ process_done (GObject *source, GAsyncResult *result, gpointer user_data)
     }
   process_result_free (res);
   fpi_ssm_mark_completed (ssm);
+}
+
+static const char *
+action_name (FpDevice *dev)
+{
+  switch (fpi_device_get_current_action (dev))
+    {
+    case FPI_DEVICE_ACTION_ENROLL:
+      return "enroll";
+    case FPI_DEVICE_ACTION_VERIFY:
+      return "verify";
+    case FPI_DEVICE_ACTION_IDENTIFY:
+      return "identify";
+    case FPI_DEVICE_ACTION_CAPTURE:
+      return "capture";
+    default:
+      return "other";
+    }
 }
 
 /* ---- capture loop ---------------------------------------------------------------------------
@@ -724,8 +794,8 @@ capture_handler (FpiSsm *ssm, FpDevice *dev)
         {
           guint16 off = command (self, i)->key_offset;
 
-          if (off == VFS495_NO_KEY || (gsize) off + VFS495_KEY_FIELD_LEN > len || RAND_bytes (self->image_key, 32) != 1 ||
-              RAND_bytes (self->image_iv, 16) != 1 || RAND_bytes (bytes + off + 48, VFS495_KEY_FIELD_LEN - 48) != 1)
+          if (off == VFS495_NO_KEY || (gsize) off + VFS495_KEY_FIELD_LEN > len || !vfs495_random (self->image_key, 32) ||
+              !vfs495_random (self->image_iv, 16) || !vfs495_random (bytes + off + 48, VFS495_KEY_FIELD_LEN - 48))
             {
               fpi_ssm_mark_failed (ssm, fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL,
                                                                   "cannot set the image key"));
@@ -751,8 +821,9 @@ capture_handler (FpiSsm *ssm, FpDevice *dev)
     case CAP_READ_START:
       self->captured = TRUE;
       self->arm_time = now;
+      self->first_data = 0;
       reader_start (self);
-      fp_dbg ("armed: waiting for a finger");
+      note (self, "armed: waiting for a finger");
       fpi_ssm_next_state (ssm);
       break;
 
@@ -770,7 +841,7 @@ capture_handler (FpiSsm *ssm, FpDevice *dev)
         }
       else if (now - self->arm_time > (gint64) REARM_AFTER_MS * 1000)
         {
-          fp_dbg ("armed for %d s without a finger: arming again", REARM_AFTER_MS / 1000);
+          note (self, "armed for %d s without a finger: arming again", REARM_AFTER_MS / 1000);
           self->rearm = TRUE;
           fpi_ssm_jump_to_state (ssm, CAP_ABORT);
         }
@@ -813,8 +884,10 @@ capture_handler (FpiSsm *ssm, FpDevice *dev)
       break;
 
     case CAP_STOP_READER:
-      fp_dbg ("abort: status %02x%02x; stream %u bytes, %u after the abort", self->reply->len > 1 ? self->reply->data[1] : 0,
-              self->reply->len > 0 ? self->reply->data[0] : 0, self->stream_len, self->stream->len - self->stream_len);
+      note (self, "abort: status %02x%02x; stream %u bytes in %.0f ms, %u after the abort",
+            self->reply->len > 1 ? self->reply->data[1] : 0, self->reply->len > 0 ? self->reply->data[0] : 0,
+            self->stream_len, self->first_data ? (self->last_data - self->first_data) / 1000.0 : 0.0,
+            self->stream->len - self->stream_len);
       g_cancellable_cancel (self->read_cancel);
       if (self->pending == 0)
         fpi_ssm_next_state (ssm);
@@ -828,6 +901,7 @@ capture_handler (FpiSsm *ssm, FpDevice *dev)
           fpi_ssm_mark_failed (ssm, g_steal_pointer (&self->read_error));
           return;
         }
+      self->after_abort = self->stream->len - self->stream_len;
       g_byte_array_set_size (self->stream, self->stream_len);
       if (!self->finger_reported || self->deactivating)
         {
@@ -837,7 +911,20 @@ capture_handler (FpiSsm *ssm, FpDevice *dev)
         {
           g_autoptr(GTask) task = g_task_new (dev, NULL, process_done, ssm);
           ProcessInput *in = g_new0 (ProcessInput, 1);
+          Vfs495DiagSwipe *record = &in->record;
 
+          in->diag = vfs495_diag_ref (self->diag);
+          record->action = action_name (dev);
+          record->setup_ms = self->setup_ms;
+          record->port_reset = self->port_reset && self->setup_ms > 0;
+          record->recovering = self->recovering;
+          record->wait_ms = self->first_data ? (self->first_data - self->arm_time) / 1000.0 : 0;
+          record->swipe_ms = self->first_data ? (self->last_data - self->first_data) / 1000.0 : 0;
+          record->stream_bytes = self->stream_len;
+          record->after_abort = self->after_abort;
+          record->abort_status = self->reply && self->reply->len > 1 ?
+                                 (guint16) (self->reply->data[1] << 8 | self->reply->data[0]) : 0;
+          self->setup_ms = 0;
           in->stream = g_steal_pointer (&self->stream);
           memcpy (in->key, self->image_key, 32);
           memcpy (in->iv, self->image_iv, 16);
@@ -871,7 +958,7 @@ capture_done (FpiSsm *ssm, FpDevice *dev, GError *error)
         {
           if (!reported && !self->recovering)
             {
-              fp_warn ("capture failed (%s); resetting the sensor and trying again", error->message);
+              note_warn (self, "capture failed (%s); resetting the sensor and trying again", error->message);
               self->recovering = TRUE;
               g_error_free (error);
               start_capture (self);
@@ -879,15 +966,16 @@ capture_done (FpiSsm *ssm, FpDevice *dev, GError *error)
             }
           if (!reported)
             {
+              note_warn (self, "capture failed again: %s", error->message);
               fpi_image_device_session_error (img_dev, error);
               return;
             }
-          fp_warn ("capture failed during a swipe: %s", error->message);
+          note_warn (self, "capture failed during a swipe: %s", error->message);
           fpi_image_device_retry_scan (img_dev, FP_DEVICE_RETRY_GENERAL);
         }
       else
         {
-          fp_dbg ("capture failed while stopping: %s", error->message);
+          note (self, "capture failed while stopping: %s", error->message);
         }
       g_error_free (error);
     }
@@ -996,6 +1084,8 @@ close_done (FpiSsm *ssm, FpDevice *dev, GError *error)
   g_clear_pointer (&self->reply, g_byte_array_unref);
   g_clear_pointer (&self->data, g_byte_array_unref);
   g_clear_pointer (&self->cmds, vfs495_commands_free);
+  note (self, "closed");
+  g_clear_pointer (&self->diag, vfs495_diag_unref);
   fpi_image_device_close_complete (FP_IMAGE_DEVICE (dev), NULL);
 }
 
@@ -1009,7 +1099,7 @@ open_done (FpiSsm *ssm, FpDevice *dev, GError *error)
   if (error && !self->open_retried)
     {
       /* seen once in testing: the sensor dropped off the bus right after the port reset */
-      fp_warn ("sensor setup failed (%s); trying once more", error->message);
+      note_warn (self, "sensor setup failed (%s); trying once more", error->message);
       g_error_free (error);
       self->open_retried = TRUE;
       self->force_reset = TRUE;
@@ -1018,10 +1108,12 @@ open_done (FpiSsm *ssm, FpDevice *dev, GError *error)
     }
   if (error)
     {
+      note_warn (self, "sensor setup failed: %s", error->message);
       if (self->claimed)
         g_usb_device_release_interface (fpi_device_get_usb_device (dev), 0, 0, NULL);
       self->claimed = FALSE;
       g_clear_pointer (&self->cmds, vfs495_commands_free);
+      g_clear_pointer (&self->diag, vfs495_diag_unref);
     }
   fpi_image_device_open_complete (FP_IMAGE_DEVICE (dev), error);
 }
@@ -1033,6 +1125,12 @@ dev_open (FpImageDevice *dev)
   const char *path = g_getenv ("VFS495_COMMANDS");
   GError *error = NULL;
 
+  /* libfprint's tests replay recorded USB traffic (tests/umockdev): every value the driver
+   * sends must then be the same as in the recording */
+  vfs495_random_set_deterministic (g_strcmp0 (g_getenv ("FP_DEVICE_EMULATION"), "1") == 0);
+  g_clear_pointer (&self->diag, vfs495_diag_unref);
+  self->diag = vfs495_diag_open ();
+  note (self, "open: driver %s%s", VFS495_VERSION, self->diag ? ", diagnostics on" : "");
   self->cmds = vfs495_commands_load (path ? path : COMMANDS_PATH, &error);
   if (!self->cmds)
     {
@@ -1099,6 +1197,7 @@ dev_suspend (FpDevice *dev)
   FpiDeviceVfs495 *self = FPI_DEVICE_VFS495 (dev);
 
   self->suspending = TRUE;
+  note (self, "suspend%s", self->loop_running ? " while armed" : "");
   if (!self->loop_running)
     {
       self->session_open = FALSE;
@@ -1114,6 +1213,7 @@ dev_resume (FpDevice *dev)
 
   self->suspending = FALSE;
   self->session_open = FALSE;
+  note (self, "resume");
   if (self->awaiting && !self->loop_running)
     start_capture (self);
   fpi_device_resume_complete (dev, NULL);
@@ -1131,6 +1231,7 @@ fpi_device_vfs495_finalize (GObject *object)
 
   vfs495_crypto_clear (&self->crypto);
   g_clear_pointer (&self->cmds, vfs495_commands_free);
+  g_clear_pointer (&self->diag, vfs495_diag_unref);
   g_clear_pointer (&self->flash, g_byte_array_unref);
   g_clear_pointer (&self->cmd_out, g_byte_array_unref);
   g_clear_pointer (&self->reply, g_byte_array_unref);

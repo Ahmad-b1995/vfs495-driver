@@ -31,7 +31,7 @@ typedef struct
   Vfs495Phase phase;
   guint8      flags;
   guint32     data_len;     /* bytes the sensor sends on endpoint 0x82 after this command */
-  guint16     key_offset;   /* offset of the 64-byte image-key field, 0xFFFF if none */
+  guint16     key_offset;   /* offset of the arming key field (VFS495_KEY_FIELD_LEN), 0xFFFF if none */
   GBytes     *payload;
 } Vfs495Command;
 

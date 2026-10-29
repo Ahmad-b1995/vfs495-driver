@@ -11,7 +11,7 @@ if [ "$status" = config-files ]; then
 	cat >&2 <<'MSG'
 
 *** vfs495-driver was removed: fingerprint login is off.
-*** Rebuild it:      cd ~/Projects/vfs495-driver && sudo driver/tools/install-driver.sh
+*** Rebuild it:      cd @SOURCE_DIR@ && sudo driver/tools/install-driver.sh
 *** If intended:     sudo apt purge vfs495-driver    (silences this message)
 
 MSG

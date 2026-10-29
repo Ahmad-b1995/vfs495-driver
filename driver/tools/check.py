@@ -16,7 +16,7 @@ import sys
 
 VID, PID = "138a", "003f"
 MODULE_NAME = "libfprint-tod-vfs495.so"
-FIX = "rebuild and reinstall the driver: cd ~/Projects/vfs495-driver && sudo driver/tools/install-driver.sh"
+FIX = "rebuild and reinstall the driver: cd @SOURCE_DIR@ && sudo driver/tools/install-driver.sh"
 
 
 def reader_on_usb():

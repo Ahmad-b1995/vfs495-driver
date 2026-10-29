@@ -44,11 +44,11 @@ vfs495_frames_to_lines (const guint8 *plain, gsize len, const guint16 *descrambl
 }
 
 guint8 *
-vfs495_decode_stream (const guint8 *stream, gsize len, const guint8 key[32], const guint8 iv[16],
-                      const guint16 *descramble, int *n_lines, Vfs495DecodeInfo *info, GError **error)
+vfs495_decrypt_stream (const guint8 *stream, gsize len, const guint8 key[32], const guint8 iv[16], gsize *plain_len,
+                       GError **error)
 {
   gsize usable = len - len % 16;
-  g_autofree guint8 *plain = NULL;
+  guint8 *plain;
   EVP_CIPHER_CTX *ctx;
   int out_len = 0;
   gboolean ok;
@@ -65,8 +65,22 @@ vfs495_decode_stream (const guint8 *stream, gsize len, const guint8 key[32], con
   EVP_CIPHER_CTX_free (ctx);
   if (!ok)
     {
+      g_free (plain);
       g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "image decryption failed");
       return NULL;
     }
-  return vfs495_frames_to_lines (plain, (gsize) out_len, descramble, n_lines, info);
+  *plain_len = (gsize) out_len;
+  return plain;
+}
+
+guint8 *
+vfs495_decode_stream (const guint8 *stream, gsize len, const guint8 key[32], const guint8 iv[16],
+                      const guint16 *descramble, int *n_lines, Vfs495DecodeInfo *info, GError **error)
+{
+  gsize plain_len;
+  g_autofree guint8 *plain = vfs495_decrypt_stream (stream, len, key, iv, &plain_len, error);
+
+  if (!plain)
+    return NULL;
+  return vfs495_frames_to_lines (plain, plain_len, descramble, n_lines, info);
 }

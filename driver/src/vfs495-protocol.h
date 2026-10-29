@@ -70,6 +70,15 @@ typedef struct
   GByteArray     *hello;        /* ClientHello handshake message, for the Finished hash */
 } Vfs495Crypto;
 
+/*
+ * Random bytes for every random value of a session: ClientHello random, pre-master secret, RSA
+ * padding and the image key. Deterministic mode makes them the same in every run, so a session
+ * recorded with umockdev replays byte for byte (libfprint's emulation mode, tests/umockdev).
+ */
+gboolean    vfs495_random (guint8 *buf,
+                           gsize   len);
+void        vfs495_random_set_deterministic (gboolean on);
+
 /* forget all keys */
 void        vfs495_crypto_clear (Vfs495Crypto *c);
 

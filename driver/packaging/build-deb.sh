@@ -62,12 +62,23 @@ install -d "$STAGE/usr/lib/systemd/system/fprintd.service.d"
 { cat "$PKG/fprintd-vfs495-driver.conf"; printf 'ExecStart=\nExecStart=%s --no-timeout\n' "$FPRINTD"; } \
 	>"$STAGE/usr/lib/systemd/system/fprintd.service.d/vfs495-driver.conf"
 chmod 0644 "$STAGE/usr/lib/systemd/system/fprintd.service.d/vfs495-driver.conf"
+# tools that tell how to rebuild the driver name this checkout
+source_dir() { sed "s|@SOURCE_DIR@|$ROOT|g" "$1" >"$2"; chmod "$3" "$2"; }
+install -d "$STAGE/usr/bin" "$STAGE/etc/vfs495-driver"
 install -D -m 0755 "$ROOT/driver/tools/scores.sh" "$STAGE/usr/bin/vfs495-scores"
-install -D -m 0755 "$ROOT/driver/tools/check.py" "$STAGE/usr/bin/vfs495-check"
+source_dir "$ROOT/driver/tools/check.py" "$STAGE/usr/bin/vfs495-check" 0755
+source_dir "$ROOT/driver/tools/diag.sh" "$STAGE/usr/bin/vfs495-diag" 0755
 install -D -m 0644 "$PKG/pam-config" "$STAGE/usr/share/pam-configs/vfs495-driver"
-install -D -m 0755 "$PKG/system-sleep" "$STAGE/usr/lib/systemd/system-sleep/vfs495-driver"
+install -D -m 0644 "$PKG/tmpfiles.conf" "$STAGE/usr/lib/tmpfiles.d/vfs495-driver.conf"
+# fprintd restarted after resume, enabled statically for every sleep target
+UNIT=vfs495-driver-resume.service
+install -D -m 0644 "$PKG/resume.service" "$STAGE/usr/lib/systemd/system/$UNIT"
+for t in suspend hibernate hybrid-sleep suspend-then-hibernate; do
+	install -d "$STAGE/usr/lib/systemd/system/$t.target.wants"
+	ln -s "../$UNIT" "$STAGE/usr/lib/systemd/system/$t.target.wants/$UNIT"
+done
 # configuration files survive removal of the package: the hook warns if an upgrade removed it
-install -D -m 0755 "$PKG/apt-hook.sh" "$STAGE/etc/vfs495-driver/apt-hook.sh"
+source_dir "$PKG/apt-hook.sh" "$STAGE/etc/vfs495-driver/apt-hook.sh" 0755
 install -D -m 0644 "$PKG/apt-hook.conf" "$STAGE/etc/apt/apt.conf.d/80vfs495-driver"
 install -d "$STAGE/usr/share/doc/vfs495-driver"
 cat >"$STAGE/usr/share/doc/vfs495-driver/README" <<EOF
@@ -78,6 +89,7 @@ Enroll:   fprintd-enroll -f right-index-finger
 Test:     fprintd-verify
 Scores:   vfs495-scores ["7 days ago"]
 Check:    vfs495-check        (runs by itself after every libfprint upgrade)
+Beta:     sudo vfs495-diag on|off|status|bundle   (records every swipe; off by default)
 
 /usr/lib/vfs495-driver/commands.bin was built from HP's driver download (SoftPaq sp84530)
 on this machine. It is derived from HP's software: do not redistribute this package.

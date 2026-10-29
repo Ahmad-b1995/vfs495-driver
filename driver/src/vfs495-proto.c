@@ -1,6 +1,5 @@
 #include "vfs495-proto.h"
 
-#include <openssl/rand.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -390,8 +389,8 @@ vfs495_session_arm (Vfs495Session *s, GError **error)
       if (c->phase == VFS495_PHASE_ARM)
         {
           if (c->key_offset == VFS495_NO_KEY || (gsize) c->key_offset + VFS495_KEY_FIELD_LEN > len ||
-              RAND_bytes (s->image_key, 32) != 1 || RAND_bytes (s->image_iv, 16) != 1 ||
-              RAND_bytes (payload + c->key_offset + 48, VFS495_KEY_FIELD_LEN - 48) != 1)
+              !vfs495_random (s->image_key, 32) || !vfs495_random (s->image_iv, 16) ||
+              !vfs495_random (payload + c->key_offset + 48, VFS495_KEY_FIELD_LEN - 48))
             {
               g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "cannot set the image key");
               return FALSE;

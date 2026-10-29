@@ -166,7 +166,45 @@ bad:
   return FALSE;
 }
 
-/* RSA PKCS#1 v1.5 encryption; the sensor's modulus is stored little-endian */
+/* ---- randomness ------------------------------------------------------------------------ */
+
+static gboolean deterministic;
+static guint64  deterministic_counter;
+
+void
+vfs495_random_set_deterministic (gboolean on)
+{
+  deterministic = on;
+  deterministic_counter = 0;
+}
+
+gboolean
+vfs495_random (guint8 *buf, gsize len)
+{
+  if (!deterministic)
+    return RAND_bytes (buf, (int) len) == 1;
+  /* SHA-256 of a label and a counter: the same bytes in every run */
+  for (gsize done = 0; done < len; done += 32)
+    {
+      guint8 block[32], ctr[8];
+      const guint8 label[] = "vfs495 emulation";
+
+      for (int i = 0; i < 8; i++)
+        ctr[i] = (guint8) (deterministic_counter >> (56 - 8 * i));
+      deterministic_counter++;
+      {
+        const guint8 *p[] = { label, ctr };
+        const gsize l[] = { sizeof label - 1, 8 };
+        digest (EVP_sha256 (), p, l, 2, block);
+      }
+      memcpy (buf + done, block, MIN (32, len - done));
+    }
+  return TRUE;
+}
+
+/* RSA PKCS#1 v1.5 encryption; the sensor's modulus is stored little-endian. The padding is
+ * built here (00 02, non-zero random bytes, 00, message) and the RSA operation done raw, so the
+ * padding comes from vfs495_random like every other random value of a session. */
 static gboolean
 rsa_encrypt (const guint8 modulus_le[RSA_LEN], const guint8 *msg, gsize msg_len, guint8 out[RSA_LEN],
              GError **error)
@@ -178,11 +216,23 @@ rsa_encrypt (const guint8 modulus_le[RSA_LEN], const guint8 *msg, gsize msg_len,
   EVP_PKEY_CTX *kctx = EVP_PKEY_CTX_new_from_name (NULL, "RSA", NULL);
   EVP_PKEY *pkey = NULL;
   EVP_PKEY_CTX *ectx = NULL;
+  guint8 em[RSA_LEN];
+  gsize ps_len = RSA_LEN - 3 - msg_len;
   size_t out_len = RSA_LEN;
   gboolean ok = FALSE;
 
+  em[0] = 0x00;
+  em[1] = 0x02;
+  ok = msg_len <= RSA_LEN - 11 && vfs495_random (em + 2, ps_len);
+  for (gsize i = 2; ok && i < 2 + ps_len; i++)
+    while (ok && em[i] == 0)
+      ok = vfs495_random (em + i, 1);
+  em[2 + ps_len] = 0x00;
+  if (ok)
+    memcpy (em + 3 + ps_len, msg, msg_len);
+
   BN_set_word (e, 65537);
-  if (n && e && bld && kctx &&
+  if (ok && n && e && bld && kctx &&
       OSSL_PARAM_BLD_push_BN (bld, OSSL_PKEY_PARAM_RSA_N, n) &&
       OSSL_PARAM_BLD_push_BN (bld, OSSL_PKEY_PARAM_RSA_E, e) &&
       (params = OSSL_PARAM_BLD_to_param (bld)) &&
@@ -190,15 +240,18 @@ rsa_encrypt (const guint8 modulus_le[RSA_LEN], const guint8 *msg, gsize msg_len,
       EVP_PKEY_fromdata (kctx, &pkey, EVP_PKEY_PUBLIC_KEY, params) > 0 &&
       (ectx = EVP_PKEY_CTX_new_from_pkey (NULL, pkey, NULL)) &&
       EVP_PKEY_encrypt_init (ectx) > 0 &&
-      EVP_PKEY_CTX_set_rsa_padding (ectx, RSA_PKCS1_PADDING) > 0 &&
-      EVP_PKEY_encrypt (ectx, out, &out_len, msg, msg_len) > 0 && out_len == RSA_LEN)
+      EVP_PKEY_CTX_set_rsa_padding (ectx, RSA_NO_PADDING) > 0 &&
+      EVP_PKEY_encrypt (ectx, out, &out_len, em, RSA_LEN) > 0 && out_len == RSA_LEN)
     ok = TRUE;
   else
-    g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "RSA encryption failed");
+    {
+      ok = FALSE;
+      g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "RSA encryption failed");
+    }
 
+  explicit_bzero (em, sizeof em);
   EVP_PKEY_CTX_free (ectx);
   EVP_PKEY_free (pkey);
-  EVP_PKEY_CTX_free (kctx);
   OSSL_PARAM_free (params);
   OSSL_PARAM_BLD_free (bld);
   BN_free (e);
@@ -229,7 +282,7 @@ vfs495_crypto_hello (Vfs495Crypto *c, GBytes *hello_template, GError **error)
       g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "ClientHello template too short");
       return NULL;
     }
-  if (RAND_bytes (c->client_random, 32) != 1 || RAND_bytes (c->premaster + 2, 46) != 1)
+  if (!vfs495_random (c->client_random, 32) || !vfs495_random (c->premaster + 2, 46))
     {
       g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "no randomness");
       return NULL;

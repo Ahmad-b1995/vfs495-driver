@@ -29,6 +29,14 @@ guint8 *vfs495_decode_stream (const guint8     *stream,
                               Vfs495DecodeInfo *info,
                               GError          **error);
 
+/* the decrypted stream (newly allocated, *plain_len bytes), or NULL with error set */
+guint8 *vfs495_decrypt_stream (const guint8 *stream,
+                               gsize         len,
+                               const guint8  key[32],
+                               const guint8  iv[16],
+                               gsize        *plain_len,
+                               GError      **error);
+
 /* the frames of an already decrypted stream, as vfs495_decode_stream returns them */
 guint8 *vfs495_frames_to_lines (const guint8     *plain,
                                 gsize             len,

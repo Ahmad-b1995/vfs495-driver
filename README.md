@@ -280,7 +280,7 @@ measurements the stitcher takes of the finger region, and reports a retry for ba
 | finger resting | still >= 90% and < 10 trusted speed estimates | Remove your finger, and try swiping your finger again |
 | off centre | fewer than 60% of columns carry ridges | Your finger was not centered, try swiping your finger again |
 | too fast | >= 25% of confident lags below the trusted minimum | Swipe was too fast, try again |
-| too short | under 100 lines, no usable motion, or under 80 rows | Swipe was too short, try again |
+| too short | under 100 lines, no usable motion, or under 185 rows | Swipe was too short, try again |
 
 The limits sit between 44 normal swipes (three fingers, six sessions: at most 15% fast, at least
 88% coverage, at most 36% still), all judged ok, and 11 deliberately bad ones (fast: at least
