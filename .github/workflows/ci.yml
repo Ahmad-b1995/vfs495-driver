@@ -1,0 +1,39 @@
+# Build the driver and run the tests that need no recorded data (the private recordings stay
+# on the developer's machine; their tests skip here), plain and under AddressSanitizer and
+# UndefinedBehaviorSanitizer, then fuzz each parser briefly from an empty corpus.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends meson ninja-build pkg-config clang \
+            libfprint-2-tod-dev libgusb-dev libssl-dev libglib2.0-dev
+      - name: Build
+        run: meson setup build driver -Dnative=false && ninja -C build
+      - name: Tests
+        run: meson test -C build --print-errorlogs
+      - name: Tests under sanitizers
+        run: |
+          meson setup build-san driver -Db_sanitize=address,undefined -Db_lundef=false -Dbuildtype=debugoptimized
+          ninja -C build-san
+          ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+            meson test -C build-san --print-errorlogs
+      - name: Fuzz smoke (60 s per parser)
+        run: |
+          CC=clang meson setup build-fuzz driver -Dfuzz=true -Db_sanitize=address -Db_lundef=false -Dbuildtype=debugoptimized
+          ninja -C build-fuzz
+          for t in commands records frames assemble; do
+            max_len=16384; [ "$t" = assemble ] && max_len=$((400 * 264))
+            mkdir -p corpus-$t
+            ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 build-fuzz/fuzz-$t corpus-$t \
+              -max_total_time=60 -max_len=$max_len -timeout=20 -print_final_stats=1
+          done

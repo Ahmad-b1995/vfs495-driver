@@ -26,10 +26,31 @@ fprintd-enroll
 
 The build downloads HP's Linux driver package (SoftPaq sp84530, about 3 MB) from HP and
 checks its MD5, then extracts the sensor's setup commands and firmware patches from it. No HP
-code runs, and nothing from HP is stored in this repository, so the package you build
-contains data derived from HP's download: build it yourself and do not redistribute the
-`.deb`. Updating is `git pull` and the same install command; enrolled prints are kept.
-Removing is `sudo apt remove vfs495-driver`.
+code runs. This repository holds no HP code, firmware or configuration data: the recipe that
+extracts them (`driver/recipe/`) refers to byte ranges and patch-table entries of HP's
+download, and its only literal bytes are about 290 bytes of protocol framing and constants
+(command bytes, TLV headers, read lengths). The package you build therefore contains data
+derived from HP's download: build it yourself and do not redistribute the `.deb`. Updating is
+`git pull` and the same install command; enrolled prints are kept. Removing is
+`sudo apt purge vfs495-driver`, which also undoes the system changes below.
+
+What the package changes on your system:
+
+- **Fingerprint login with 2 tries.** It switches PAM from Ubuntu's fprintd profile (1 try) to
+  its own (`max-tries=2 timeout=10`), once, on first install; removing the package switches
+  back.
+- **fprintd keeps running** (`--no-timeout`) instead of exiting after 30 s idle, so the reader
+  is ready sooner at the lock screen; a unit restarts fprintd after every resume
+  (`vfs495-driver-resume.service`).
+- **fprintd logs** the matcher's scores and the driver's view of every swipe to the journal
+  (`G_MESSAGES_DEBUG`), which `vfs495-scores` summarises. No images are logged.
+- **Checks after upgrades.** `vfs495-check` runs after every libfprint upgrade and warns if the
+  driver no longer loads; an apt hook (a configuration file, kept until purge) warns after
+  every apt run if an upgrade removed the package.
+- **Beta diagnostics, off by default.** `sudo vfs495-diag on [DAYS]` makes the driver keep every
+  swipe (decrypted scan, stitched image, measurements, timings) in the root-only folder
+  `/var/lib/vfs495-driver/diag` for up to 60 days, to improve the driver from real use;
+  `sudo vfs495-diag off` deletes it. See "Beta diagnostics".
 
 If your reader behaves differently (a sensor with other firmware may need other patches),
 please open an issue with the output of `journalctl -b -u fprintd` and `lsusb -v -d 138a:003f`.
@@ -221,8 +242,10 @@ Verified on an HP ZBook 17 G3, Ubuntu 25.10, sensor firmware 04.60.00.0104 Falco
     reader comes back at a new address. Once, libfprint added the new reader but kept the old
     entry, which GNOME used first: no fingerprint prompt (`libusb couldn't open USB device
     /dev/bus/usb/001/052`). fprintd was idle at the time, so the stale entry was not held open.
-    Since fprintd runs with `--no-timeout`, the package restarts it after every resume (a
-    systemd sleep hook, non-blocking), so it never carries devices across a suspend.
+    Since fprintd runs with `--no-timeout`, the package restarts it after every resume, so it
+    never carries devices across a suspend. From a systemd sleep hook the restart came while
+    logind was still finishing the sleep, and fprintd could not take its sleep inhibitor
+    (28 warnings in October); since 0.6.0 a unit ordered after the sleep targets restarts it.
 
 ## Image quality (Phase 2, in progress)
 
@@ -319,6 +342,57 @@ command data equals the data recorded from HP's tool for all 26 commands (`meson
 `recipe`); on the sensor, sessions open in 1.04 s and swipes are captured with it.
 `research/hpdata/make_recipe.py` derives the recipe from a recorded command file, and
 `research/hpdata/map_commands.py` shows which bytes of it occur in HP's files.
+
+## Beta diagnostics
+
+`vfs495-diag` (`driver/tools/diag.sh`, driver side in `driver/src/vfs495-diag.c`) records what
+the journal cannot: the swipes themselves.
+
+| Command | Effect |
+|---|---|
+| `vfs495-diag status` | on or off, until when, how many swipes |
+| `sudo vfs495-diag on [DAYS]` | record for DAYS days (default 30, at most 60), from the next fingerprint prompt |
+| `sudo vfs495-diag off` | stop and delete everything recorded |
+| `sudo vfs495-diag bundle [DIR]` | one `.tar.gz` (default `captures/bundles/` of the checkout): the recordings, fprintd's journal since recording began, suspend and resume events, the enrolled prints, package versions |
+
+Per swipe the driver writes a folder with `swipe.json` (action, verdict, the stitcher's
+measurements, sequence gaps, abort status, setup, wait, swipe, decode and stitch times, port
+resets, error recovery), `stream.dec` (the decrypted frames) and `image.pgm` (the stitched
+image, also for rejected swipes); `events.log` lists every session step with millisecond
+times. Everything is root-only (folders 0700, files 0600), the newest 500 swipes are kept,
+recording stops by itself at the chosen date, and systemd-tmpfiles deletes anything older
+than 60 days. Recording is off unless `/var/lib/vfs495-driver/diag/until` names a future time.
+These are fingerprint scans: a bundle belongs only with whoever works on the driver.
+
+## Tests
+
+`meson test -C build/driver` runs four kinds:
+
+- **unit** (`driver/tests/vfs495-unit.c`, 19 tests, no recorded data, runs in CI): the
+  stitcher on simulated swipes (`driver/tests/vfs495-sim.c`: a synthetic fingertip with
+  irregular ridges swiped over the two sensing lines with the measured pixel levels, noise and
+  column pattern) for speed, scale, image fidelity and every verdict, a dead column, and
+  thread-independent output; the stream decoder round trip through AES and frames, with lost
+  frames and junk; the command file parser against malformed files; the record layer, and the
+  key exchange against an RSA key made in the test (the sensor's side decrypts the pre-master
+  secret and verifies the host's Finished); signed patches; the diagnostics' on/off switch,
+  files, permissions and pruning.
+- **regression** (`driver/tests/vfs495-test.c`): the same code against private recordings in
+  `captures/` (below, "Layout").
+- **umockdev** (`driver/tests/umockdev/`): libfprint's own way of testing drivers. A capture
+  session through libfprint, recorded from the reader with umockdev
+  (`sudo driver/tests/umockdev/record.sh`), is replayed without it, and the image must come out
+  byte for byte. The driver runs in libfprint's emulation mode (`FP_DEVICE_EMULATION=1`), where
+  its random values (handshake randoms, RSA padding, image key) come from a fixed sequence, so
+  the replayed session matches the recording. The recordings hold a fingerprint and stay in
+  `captures/umockdev/`; re-record after changing the command data or what the driver sends.
+- **fuzz-corpus** replays of the fuzz corpus (see "Hardening").
+
+The simulator also showed a limit of the stitcher: it finds the finger from ridge energy
+against the last quarter of the stream, which is finger-free in real swipes (the sensor
+streams on for 1,000-3,000 lines after the finger leaves). A stream where the finger is still
+on the sensor in its last quarter gets a shortened print; one of the 57 recorded swipes is like
+that.
 
 ## Hardening
 
@@ -450,7 +524,9 @@ may matter across temperature or sensor units.
   builds and installs it. The package has fprintd log match results, which `vfs495-scores
   [SINCE]` (`driver/tools/scores.sh`) summarises; `vfs495-check` (`driver/tools/check.py`)
   reports whether libfprint loads the driver.
-- `driver/tests/` holds the regression tests (`meson test -C build/driver`, about 30 s). They
+- `driver/tests/vfs495-unit.c` and `vfs495-sim.c` are the tests without recorded data
+  ("Tests"); `driver/tests/umockdev/` records and replays capture sessions.
+- `driver/tests/vfs495-test.c` holds the regression tests (`meson test -C build/driver`). They
   check the driver's code against private data in `captures/` and skip without it: the SSLv3
   code against five recorded HP sessions (keys, Finished, and all 2525 client records
   re-encrypted byte for byte, all server replies MAC-checked), the command file's structure,

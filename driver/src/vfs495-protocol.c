@@ -252,6 +252,7 @@ rsa_encrypt (const guint8 modulus_le[RSA_LEN], const guint8 *msg, gsize msg_len,
   explicit_bzero (em, sizeof em);
   EVP_PKEY_CTX_free (ectx);
   EVP_PKEY_free (pkey);
+  EVP_PKEY_CTX_free (kctx);
   OSSL_PARAM_free (params);
   OSSL_PARAM_BLD_free (bld);
   BN_free (e);
