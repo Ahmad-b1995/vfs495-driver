@@ -9,13 +9,21 @@ on:
 
 jobs:
   test:
+    # Ubuntu 24.04 (libfprint 1.94.7) on the runner, 26.04 (1.95.1) in a container
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['', 'ubuntu:26.04']
     runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
     steps:
       - uses: actions/checkout@v4
       - name: Dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends meson ninja-build pkg-config clang \
+          SUDO=$(command -v sudo || true)
+          $SUDO apt-get update
+          $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            meson ninja-build pkg-config clang gcc libc6-dev \
             libfprint-2-tod-dev libgusb-dev libssl-dev libglib2.0-dev
       - name: Build
         run: meson setup build driver -Dnative=false && ninja -C build

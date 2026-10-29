@@ -673,7 +673,11 @@ process_thread (GTask *task, gpointer source, gpointer task_data, GCancellable *
       res->retry = FP_DEVICE_RETRY_CENTER_FINGER;
       break;
     case VFS495_SWIPE_TOO_FAST:
+#ifdef HAVE_RETRY_TOO_FAST
       res->retry = FP_DEVICE_RETRY_TOO_FAST;
+#else
+      res->retry = FP_DEVICE_RETRY_TOO_SHORT;
+#endif
       break;
     case VFS495_SWIPE_TOO_SHORT:
       res->retry = FP_DEVICE_RETRY_TOO_SHORT;

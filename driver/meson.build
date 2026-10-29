@@ -13,6 +13,12 @@ libcrypto = dependency('libcrypto')
 libfprint_tod = dependency('libfprint-2-tod-1')
 libfprint = dependency('libfprint-2')
 
+# FP_DEVICE_RETRY_TOO_FAST arrived in libfprint 1.94.8 (Ubuntu 24.04 has 1.94.7); without it a
+# swipe that was too fast is reported as too short
+if cc.has_header_symbol('fp-device.h', 'FP_DEVICE_RETRY_TOO_FAST', dependencies: libfprint)
+  add_project_arguments('-DHAVE_RETRY_TOO_FAST', language: 'c')
+endif
+
 # -Dfuzz=true builds libFuzzer fuzzers instead of corpus replayers (clang only): the code
 # under test is instrumented for coverage.
 if get_option('fuzz')
