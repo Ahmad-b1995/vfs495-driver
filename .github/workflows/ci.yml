@@ -36,6 +36,8 @@ jobs:
           ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
             meson test -C build-san --print-errorlogs
       - name: Fuzz smoke (60 s per parser)
+        # once is enough; the bare 26.04 image has no clang sanitizer runtime
+        if: matrix.image == ''
         run: |
           CC=clang meson setup build-fuzz driver -Dfuzz=true -Db_sanitize=address -Db_lundef=false -Dbuildtype=debugoptimized
           ninja -C build-fuzz
