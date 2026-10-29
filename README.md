@@ -1,11 +1,42 @@
 # vfs495-driver
 
-Work towards a native Linux driver for the Validity VFS495 swipe fingerprint reader
-(USB `138a:003f`), found in 2013–2015 HP EliteBook, ProBook and ZBook laptops.
+A native Linux driver for the Validity VFS495 swipe fingerprint reader (USB `138a:003f`),
+found in 2013–2015 HP EliteBook, ProBook and ZBook laptops. It plugs into the distribution's
+own libfprint as a TOD module, so fprintd, GNOME's fingerprint settings, the login screen,
+the lock screen and sudo all work with it.
 
 Builds on the reverse engineering in
-[saifulmd0/vfs495-linux](https://github.com/saifulmd0/vfs495-linux) (MIT), expected as a
-sibling clone at `../vfs495-linux`.
+[saifulmd0/vfs495-linux](https://github.com/saifulmd0/vfs495-linux) (MIT). The research
+scripts expect it as a sibling clone at `../vfs495-linux`; the driver does not.
+
+## Install
+
+Check that you have the reader: `lsusb | grep 138a:003f`. Tested on Ubuntu 25.10 and 26.04
+(libfprint 1.94.9 and 1.95.1, both with TOD). Other distributions need a libfprint built with
+TOD support.
+
+```bash
+sudo apt install git build-essential meson ninja-build pkg-config curl python3 \
+  libfprint-2-tod-dev libgusb-dev libssl-dev libglib2.0-dev fprintd libpam-fprintd
+git clone https://github.com/Ahmad-b1995/vfs495-driver.git
+cd vfs495-driver
+sudo driver/tools/install-driver.sh
+fprintd-enroll
+```
+
+The build downloads HP's Linux driver package (SoftPaq sp84530, about 3 MB) from HP and
+checks its MD5, then extracts the sensor's setup commands and firmware patches from it. No HP
+code runs, and nothing from HP is stored in this repository, so the package you build
+contains data derived from HP's download: build it yourself and do not redistribute the
+`.deb`. Updating is `git pull` and the same install command; enrolled prints are kept.
+Removing is `sudo apt remove vfs495-driver`.
+
+If your reader behaves differently (a sensor with other firmware may need other patches),
+please open an issue with the output of `journalctl -b -u fprintd` and `lsusb -v -d 138a:003f`.
+
+## License
+
+LGPL-2.1-or-later, like libfprint (`LICENSE`). See `NOTICE` for the MIT-licensed upstream work.
 
 ## Status
 
